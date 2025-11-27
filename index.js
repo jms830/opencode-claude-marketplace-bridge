@@ -658,9 +658,12 @@ export const ClaudeMarketplaceBridge = async ({ client, $ }) => {
       // Skip if this exact key already exists (shouldn't happen with prefixes)
       if (config.command[commandKey]) {
         // Fallback to full namespaced name
+        const fallbackDesc = cmdConfig.description !== "Command from Claude marketplace"
+          ? `${cmdConfig.description} • ${marketplace}`
+          : `${basename} • ${marketplace}`
         config.command[`${basename}__${slug(marketplace)}`] = {
           template: cmdConfig.template,
-          description: `[${marketplace}] ${cmdConfig.description}`,
+          description: fallbackDesc,
           ...(cmdConfig.agent && { agent: cmdConfig.agent }),
           ...(cmdConfig.model && { model: cmdConfig.model }),
           ...(cmdConfig.subtask && { subtask: cmdConfig.subtask })
@@ -668,9 +671,15 @@ export const ClaudeMarketplaceBridge = async ({ client, $ }) => {
         continue
       }
       
+      // Format: "Description • marketplace-name"
+      // This makes fuzzy search work well - typing the marketplace name filters to those commands
+      const formattedDesc = cmdConfig.description !== "Command from Claude marketplace"
+        ? `${cmdConfig.description} • ${marketplace}`
+        : `${basename} • ${marketplace}`
+      
       config.command[commandKey] = {
         template: cmdConfig.template,
-        description: `[${marketplace}] ${cmdConfig.description}`,
+        description: formattedDesc,
         ...(cmdConfig.agent && { agent: cmdConfig.agent }),
         ...(cmdConfig.model && { model: cmdConfig.model }),
         ...(cmdConfig.subtask && { subtask: cmdConfig.subtask })
@@ -678,6 +687,32 @@ export const ClaudeMarketplaceBridge = async ({ client, $ }) => {
     }
     
     console.log(`[claude-bridge] Injected ${commands.size} commands into OpenCode config`)
+    
+    // Also inject skills as subagents (accessible via @agent-name)
+    if (!config.agent) {
+      config.agent = {}
+    }
+    
+    for (const [skillName, skillData] of skills.entries()) {
+      const { config: skillConfig, marketplace } = skillData
+      const prefix = getMarketplacePrefix(marketplace)
+      const agentKey = `${prefix}-${slug(skillConfig.name)}`
+      
+      config.agent[agentKey] = {
+        description: `[${marketplace}] ${skillConfig.description}`,
+        mode: 'subagent',
+        prompt: skillConfig.instructions,
+        // Skills are read-only by default
+        tools: {
+          write: false,
+          edit: false
+        }
+      }
+    }
+    
+    if (skills.size > 0) {
+      console.log(`[claude-bridge] Injected ${skills.size} skills as subagents`)
+    }
   }
   
   return {
