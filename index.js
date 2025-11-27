@@ -610,19 +610,63 @@ export const ClaudeMarketplaceBridge = async ({ client, $ }) => {
   // CONFIG HOOK - Inject Claude commands as native OpenCode commands
   // ========================================================================
   
+  // Short marketplace prefixes for cleaner command names
+  const marketplacePrefixes = {
+    'personal-dev-toolkit': 'pdt',
+    'personal_dev_toolkit': 'pdt',
+    'claude-code-templates': 'cct',
+    'claude_code_templates': 'cct',
+    'claude-code-workflows': 'ccw',
+    'claude_code_workflows': 'ccw',
+    'claude-code-plugins': 'ccp',
+    'claude_code_plugins': 'ccp',
+    'anthropic-agent-skills': 'aas',
+    'anthropic_agent_skills': 'aas',
+    'superpowers-marketplace': 'spm',
+    'superpowers_marketplace': 'spm',
+  }
+  
+  function getMarketplacePrefix(marketplace) {
+    const key = marketplace.toLowerCase().replace(/-/g, '_')
+    return marketplacePrefixes[key] || slug(marketplace).substring(0, 4)
+  }
+  
   async function injectCommands(config) {
     // Initialize command object if not present
     if (!config.command) {
       config.command = {}
     }
     
-    // Add each Claude marketplace command as a native OpenCode command
+    // Track command names to detect duplicates
+    const commandCounts = new Map()
+    
+    // First pass: count occurrences of each basename
+    for (const [_, cmdData] of commands.entries()) {
+      const { basename } = cmdData
+      commandCounts.set(basename, (commandCounts.get(basename) || 0) + 1)
+    }
+    
+    // Second pass: register commands with appropriate naming
     for (const [cmdName, cmdData] of commands.entries()) {
       const { config: cmdConfig, marketplace, basename } = cmdData
       
-      // Create a unique command name: basename__marketplace (e.g., commit__personal_dev_toolkit)
-      // For common names, namespace them; for unique names, use just the basename
-      const commandKey = `${basename}__${slug(marketplace)}`
+      // Use short prefix only if there are duplicates, otherwise just use basename
+      const isDuplicate = commandCounts.get(basename) > 1
+      const prefix = getMarketplacePrefix(marketplace)
+      const commandKey = isDuplicate ? `${prefix}-${basename}` : basename
+      
+      // Skip if this exact key already exists (shouldn't happen with prefixes)
+      if (config.command[commandKey]) {
+        // Fallback to full namespaced name
+        config.command[`${basename}__${slug(marketplace)}`] = {
+          template: cmdConfig.template,
+          description: `[${marketplace}] ${cmdConfig.description}`,
+          ...(cmdConfig.agent && { agent: cmdConfig.agent }),
+          ...(cmdConfig.model && { model: cmdConfig.model }),
+          ...(cmdConfig.subtask && { subtask: cmdConfig.subtask })
+        }
+        continue
+      }
       
       config.command[commandKey] = {
         template: cmdConfig.template,
