@@ -554,6 +554,98 @@ export const ClaudeMarketplaceBridge = async ({ client, $ }) => {
   })
   
   // ========================================================================
+  // SIMPLE RUN COMMAND - Like "openskills read <name>"
+  // ========================================================================
+  
+  dynamicTools.claude_run = tool({
+    description: "Run a Claude marketplace command by name. Use this to execute commands like 'commit', 'review-pr', 'code-review', etc. If multiple commands match, shows options.",
+    args: {
+      command: tool.schema.string().describe("Command name to run (e.g., 'commit', 'code-review', 'feature-dev')"),
+      marketplace: tool.schema.string().optional().describe("Optional: specific marketplace (e.g., 'personal-dev-toolkit', 'claude-code-plugins')"),
+      arguments: tool.schema.string().optional().describe("Optional: arguments to pass to the command")
+    },
+    async execute(args) {
+      const query = args.command.toLowerCase()
+      const mpFilter = args.marketplace?.toLowerCase()
+      
+      // Find matching commands
+      const matches = []
+      for (const [name, data] of commands) {
+        const nameMatch = data.basename.toLowerCase() === query || 
+                          data.basename.toLowerCase().includes(query) ||
+                          name.toLowerCase().includes(query)
+        const mpMatch = !mpFilter || data.marketplace.toLowerCase().includes(mpFilter)
+        
+        if (nameMatch && mpMatch) {
+          matches.push({ name, data })
+        }
+      }
+      
+      if (matches.length === 0) {
+        return `No command found matching "${args.command}"${mpFilter ? ` in ${args.marketplace}` : ''}.\n\nUse claude_search_commands to find available commands.`
+      }
+      
+      // If exact match, use it
+      const exactMatch = matches.find(m => m.data.basename.toLowerCase() === query)
+      const match = exactMatch || matches[0]
+      
+      if (matches.length > 1 && !exactMatch) {
+        let output = `Multiple commands match "${args.command}":\n\n`
+        for (const m of matches.slice(0, 10)) {
+          output += `- **${m.data.basename}** (${m.data.marketplace})\n`
+        }
+        output += `\nUsing: **${match.data.basename}** from ${match.data.marketplace}\n`
+        output += `To use a different one, specify marketplace parameter.\n\n---\n\n`
+      }
+      
+      // Execute the command
+      let template = match.data.config.template
+      if (args.arguments) {
+        template = template.replace(/\$ARGUMENTS/g, args.arguments)
+        const argParts = args.arguments.split(/\s+/)
+        argParts.forEach((arg, i) => {
+          template = template.replace(new RegExp(`\\$${i + 1}`, 'g'), arg)
+        })
+      }
+      
+      return `# Command: ${match.data.basename} (${match.data.marketplace})\n\n${template}`
+    }
+  })
+  
+  dynamicTools.claude_list = tool({
+    description: "List all available Claude marketplace commands grouped by marketplace",
+    args: {
+      marketplace: tool.schema.string().optional().describe("Optional: filter by marketplace name")
+    },
+    async execute(args) {
+      const mpFilter = args.marketplace?.toLowerCase()
+      
+      // Group commands by marketplace
+      const byMarketplace = {}
+      for (const [name, data] of commands) {
+        if (mpFilter && !data.marketplace.toLowerCase().includes(mpFilter)) continue
+        if (!byMarketplace[data.marketplace]) {
+          byMarketplace[data.marketplace] = []
+        }
+        byMarketplace[data.marketplace].push(data.basename)
+      }
+      
+      let output = `# Claude Marketplace Commands\n\n`
+      output += `Total: ${commands.size} commands\n\n`
+      
+      for (const [mp, cmds] of Object.entries(byMarketplace)) {
+        output += `## ${mp} (${cmds.length})\n`
+        output += cmds.sort().map(c => `- ${c}`).join('\n')
+        output += '\n\n'
+      }
+      
+      output += `---\n\n**Usage:** \`claude_run\` with command name, e.g., \`claude_run("commit")\``
+      
+      return output
+    }
+  })
+  
+  // ========================================================================
   // SKILL TOOLS (dynamically registered)
   // Skills return their instructions for the LLM to follow
   // ========================================================================
@@ -606,117 +698,11 @@ export const ClaudeMarketplaceBridge = async ({ client, $ }) => {
     })
   }
   
-  // ========================================================================
-  // CONFIG HOOK - Inject Claude commands as native OpenCode commands
-  // ========================================================================
-  
-  // Short marketplace prefixes for cleaner command names
-  const marketplacePrefixes = {
-    'personal-dev-toolkit': 'pdt',
-    'personal_dev_toolkit': 'pdt',
-    'claude-code-templates': 'cct',
-    'claude_code_templates': 'cct',
-    'claude-code-workflows': 'ccw',
-    'claude_code_workflows': 'ccw',
-    'claude-code-plugins': 'ccp',
-    'claude_code_plugins': 'ccp',
-    'anthropic-agent-skills': 'aas',
-    'anthropic_agent_skills': 'aas',
-    'superpowers-marketplace': 'spm',
-    'superpowers_marketplace': 'spm',
-  }
-  
-  function getMarketplacePrefix(marketplace) {
-    const key = marketplace.toLowerCase().replace(/-/g, '_')
-    return marketplacePrefixes[key] || slug(marketplace).substring(0, 4)
-  }
-  
-  async function injectCommands(config) {
-    // Initialize command object if not present
-    if (!config.command) {
-      config.command = {}
-    }
-    
-    // Track command names to detect duplicates
-    const commandCounts = new Map()
-    
-    // First pass: count occurrences of each basename
-    for (const [_, cmdData] of commands.entries()) {
-      const { basename } = cmdData
-      commandCounts.set(basename, (commandCounts.get(basename) || 0) + 1)
-    }
-    
-    // Second pass: register commands with appropriate naming
-    for (const [cmdName, cmdData] of commands.entries()) {
-      const { config: cmdConfig, marketplace, basename } = cmdData
-      
-      // Use short prefix only if there are duplicates, otherwise just use basename
-      const isDuplicate = commandCounts.get(basename) > 1
-      const prefix = getMarketplacePrefix(marketplace)
-      const commandKey = isDuplicate ? `${prefix}-${basename}` : basename
-      
-      // Skip if this exact key already exists (shouldn't happen with prefixes)
-      if (config.command[commandKey]) {
-        // Fallback to full namespaced name
-        const fallbackDesc = cmdConfig.description !== "Command from Claude marketplace"
-          ? `${cmdConfig.description} • ${marketplace}`
-          : `${basename} • ${marketplace}`
-        config.command[`${basename}__${slug(marketplace)}`] = {
-          template: cmdConfig.template,
-          description: fallbackDesc,
-          ...(cmdConfig.agent && { agent: cmdConfig.agent }),
-          ...(cmdConfig.model && { model: cmdConfig.model }),
-          ...(cmdConfig.subtask && { subtask: cmdConfig.subtask })
-        }
-        continue
-      }
-      
-      // Format: "Description • marketplace-name"
-      // This makes fuzzy search work well - typing the marketplace name filters to those commands
-      const formattedDesc = cmdConfig.description !== "Command from Claude marketplace"
-        ? `${cmdConfig.description} • ${marketplace}`
-        : `${basename} • ${marketplace}`
-      
-      config.command[commandKey] = {
-        template: cmdConfig.template,
-        description: formattedDesc,
-        ...(cmdConfig.agent && { agent: cmdConfig.agent }),
-        ...(cmdConfig.model && { model: cmdConfig.model }),
-        ...(cmdConfig.subtask && { subtask: cmdConfig.subtask })
-      }
-    }
-    
-    console.log(`[claude-bridge] Injected ${commands.size} commands into OpenCode config`)
-    
-    // Also inject skills as subagents (accessible via @agent-name)
-    if (!config.agent) {
-      config.agent = {}
-    }
-    
-    for (const [skillName, skillData] of skills.entries()) {
-      const { config: skillConfig, marketplace } = skillData
-      const prefix = getMarketplacePrefix(marketplace)
-      const agentKey = `${prefix}-${slug(skillConfig.name)}`
-      
-      config.agent[agentKey] = {
-        description: `[${marketplace}] ${skillConfig.description}`,
-        mode: 'subagent',
-        prompt: skillConfig.instructions,
-        // Skills are read-only by default
-        tools: {
-          write: false,
-          edit: false
-        }
-      }
-    }
-    
-    if (skills.size > 0) {
-      console.log(`[claude-bridge] Injected ${skills.size} skills as subagents`)
-    }
-  }
+  // Note: Config hook doesn't work reliably due to caching order in OpenCode.
+  // Commands are registered as tools instead, which works perfectly.
+  // Use claude_search_commands to find commands, then call claude_cmd_* tools.
   
   return {
-    tool: dynamicTools,
-    config: injectCommands
+    tool: dynamicTools
   }
 }
