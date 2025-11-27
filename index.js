@@ -606,7 +606,38 @@ export const ClaudeMarketplaceBridge = async ({ client, $ }) => {
     })
   }
   
+  // ========================================================================
+  // CONFIG HOOK - Inject Claude commands as native OpenCode commands
+  // ========================================================================
+  
+  async function injectCommands(config) {
+    // Initialize command object if not present
+    if (!config.command) {
+      config.command = {}
+    }
+    
+    // Add each Claude marketplace command as a native OpenCode command
+    for (const [cmdName, cmdData] of commands.entries()) {
+      const { config: cmdConfig, marketplace, basename } = cmdData
+      
+      // Create a unique command name: basename__marketplace (e.g., commit__personal_dev_toolkit)
+      // For common names, namespace them; for unique names, use just the basename
+      const commandKey = `${basename}__${slug(marketplace)}`
+      
+      config.command[commandKey] = {
+        template: cmdConfig.template,
+        description: `[${marketplace}] ${cmdConfig.description}`,
+        ...(cmdConfig.agent && { agent: cmdConfig.agent }),
+        ...(cmdConfig.model && { model: cmdConfig.model }),
+        ...(cmdConfig.subtask && { subtask: cmdConfig.subtask })
+      }
+    }
+    
+    console.log(`[claude-bridge] Injected ${commands.size} commands into OpenCode config`)
+  }
+  
   return {
-    tool: dynamicTools
+    tool: dynamicTools,
+    config: injectCommands
   }
 }
