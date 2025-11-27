@@ -1,0 +1,44 @@
+{
+  "name": "opencode-claude-marketplace-bridge",
+  "version": "0.1.0",
+  "description": "Bridge Claude Code marketplaces (commands, skills, agents) into OpenCode - dynamic discovery without file copying",
+  "main": "./index.js",
+  "type": "module",
+  "license": "MIT",
+  "author": "Jordan",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/jms830/opencode-claude-marketplace-bridge.git"
+  },
+  "keywords": [
+    "opencode",
+    "claude",
+    "marketplace",
+    "plugin",
+    "bridge",
+    "commands",
+    "skills",
+    "agents"
+  ],
+  "homepage": "https://github.com/jms830/opencode-claude-marketplace-bridge#readme",
+  "bugs": {
+    "url": "https://github.com/jms830/opencode-claude-marketplace-bridge/issues"
+  },
+  "files": [
+    "index.js",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "peerDependencies": {
+    "@opencode-ai/plugin": "^0.15.0"
+  },
+  "devDependencies": {
+    "@opencode-ai/plugin": "^0.15.31"
+  },
+  "dependencies": {
+    "gray-matter": "^4.0.3"
+  }
+}
