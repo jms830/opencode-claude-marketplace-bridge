@@ -96,10 +96,54 @@ function runClaudeCLI(args, timeout = 30000) {
 // Parsing Functions
 // ============================================================================
 
+/**
+ * Fallback frontmatter parser for files with YAML syntax issues
+ * Extracts key-value pairs line by line, handles unquoted special chars
+ */
+function parseFrontmatterLoose(content) {
+  const match = content.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n([\s\S]*)$/)
+  if (!match) {
+    return { data: {}, content: content }
+  }
+  
+  const frontmatter = match[1]
+  const body = match[2]
+  const data = {}
+  
+  for (const line of frontmatter.split('\n')) {
+    // Match key: value, handling colons in the value
+    const keyMatch = line.match(/^([a-zA-Z_-]+):\s*(.*)$/)
+    if (keyMatch) {
+      const key = keyMatch[1].trim()
+      let value = keyMatch[2].trim()
+      // Remove surrounding quotes if present
+      if ((value.startsWith('"') && value.endsWith('"')) || 
+          (value.startsWith("'") && value.endsWith("'"))) {
+        value = value.slice(1, -1)
+      }
+      data[key] = value
+    }
+  }
+  
+  return { data, content: body }
+}
+
 async function parseCommand(filePath) {
   try {
     const content = await fs.readFile(filePath, "utf-8")
-    const { data, content: template } = matter(content)
+    let data, template
+    
+    try {
+      // Try strict YAML parsing first
+      const parsed = matter(content)
+      data = parsed.data
+      template = parsed.content
+    } catch (yamlErr) {
+      // Fallback to loose parsing for files with YAML issues
+      const parsed = parseFrontmatterLoose(content)
+      data = parsed.data
+      template = parsed.content
+    }
     
     return {
       template: template.trim(),
@@ -117,7 +161,19 @@ async function parseCommand(filePath) {
 async function parseSkill(filePath) {
   try {
     const content = await fs.readFile(filePath, "utf-8")
-    const { data, content: instructions } = matter(content)
+    let data, instructions
+    
+    try {
+      // Try strict YAML parsing first
+      const parsed = matter(content)
+      data = parsed.data
+      instructions = parsed.content
+    } catch (yamlErr) {
+      // Fallback to loose parsing for files with YAML issues
+      const parsed = parseFrontmatterLoose(content)
+      data = parsed.data
+      instructions = parsed.content
+    }
     
     const skillDir = path.dirname(filePath)
     const skillName = data.name || path.basename(skillDir)
