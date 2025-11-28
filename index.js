@@ -70,6 +70,96 @@ function isSkillFile(filePath) {
 }
 
 // ============================================================================
+// tmux Support for Interactive Commands
+// ============================================================================
+
+function isTmuxInstalled() {
+  try {
+    execSync("which tmux", { encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] })
+    return true
+  } catch {
+    return false
+  }
+}
+
+function getTmuxInstallInstructions() {
+  const platform = process.platform
+  if (platform === "darwin") {
+    return "brew install tmux"
+  } else if (platform === "linux") {
+    // Try to detect package manager
+    try {
+      execSync("which apt-get", { stdio: ["pipe", "pipe", "pipe"] })
+      return "sudo apt-get install tmux"
+    } catch {}
+    try {
+      execSync("which dnf", { stdio: ["pipe", "pipe", "pipe"] })
+      return "sudo dnf install tmux"
+    } catch {}
+    try {
+      execSync("which yum", { stdio: ["pipe", "pipe", "pipe"] })
+      return "sudo yum install tmux"
+    } catch {}
+    try {
+      execSync("which pacman", { stdio: ["pipe", "pipe", "pipe"] })
+      return "sudo pacman -S tmux"
+    } catch {}
+    return "Install tmux using your package manager (apt, dnf, yum, pacman, etc.)"
+  }
+  return "Install tmux for your system"
+}
+
+function generateTmuxSessionName() {
+  return `claude-${Date.now().toString(36)}`
+}
+
+function runInTmux(command, sessionName) {
+  try {
+    // Create a detached tmux session running the command
+    // After command completes, show a message and wait for user to press a key
+    const wrappedCmd = `${command}; echo ""; echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"; echo "Command completed. Press any key to close..."; read -n 1`
+    execSync(`tmux new-session -d -s "${sessionName}" bash -c '${wrappedCmd.replace(/'/g, "'\\''")}'`, {
+      encoding: "utf-8",
+      stdio: ["pipe", "pipe", "pipe"]
+    })
+    return { 
+      success: true, 
+      sessionName,
+      message: `Interactive session started in tmux.\n\n**To interact with the command, run:**\n\`\`\`\ntmux attach -t ${sessionName}\n\`\`\`\n\n**Tips:**\n- Detach without closing: \`Ctrl+b\` then \`d\`\n- Kill session: \`tmux kill-session -t ${sessionName}\``
+    }
+  } catch (err) {
+    return { 
+      success: false, 
+      error: err.message 
+    }
+  }
+}
+
+function listTmuxSessions() {
+  try {
+    const result = execSync("tmux list-sessions 2>/dev/null", { 
+      encoding: "utf-8", 
+      stdio: ["pipe", "pipe", "pipe"] 
+    })
+    return result.trim().split('\n').filter(Boolean)
+  } catch {
+    return []
+  }
+}
+
+function killTmuxSession(sessionName) {
+  try {
+    execSync(`tmux kill-session -t "${sessionName}"`, {
+      encoding: "utf-8",
+      stdio: ["pipe", "pipe", "pipe"]
+    })
+    return { success: true }
+  } catch (err) {
+    return { success: false, error: err.message }
+  }
+}
+
+// ============================================================================
 // Claude CLI Wrapper
 // ============================================================================
 
@@ -89,6 +179,33 @@ function runClaudeCLI(args, timeout = 30000) {
       output: stderr || stdout || err.message,
       error: err.message
     }
+  }
+}
+
+function runClaudeCLIInteractive(args) {
+  if (!isTmuxInstalled()) {
+    return {
+      success: false,
+      needsTmux: true,
+      output: `**tmux is required for interactive commands but is not installed.**\n\nInstall it with:\n\`\`\`\n${getTmuxInstallInstructions()}\n\`\`\`\n\nThen try again.`
+    }
+  }
+  
+  const sessionName = generateTmuxSessionName()
+  const result = runInTmux(`claude ${args}`, sessionName)
+  
+  if (result.success) {
+    return {
+      success: true,
+      interactive: true,
+      sessionName: result.sessionName,
+      output: result.message
+    }
+  }
+  
+  return {
+    success: false,
+    output: `Failed to start interactive session: ${result.error}`
   }
 }
 
@@ -439,6 +556,81 @@ export const ClaudeMarketplaceBridge = async ({ client, $ }) => {
   })
   
   // ========================================================================
+  // TMUX SESSION MANAGEMENT TOOLS
+  // ========================================================================
+  
+  dynamicTools.claude_tmux_list = tool({
+    description: "List active tmux sessions for Claude commands",
+    args: {},
+    async execute() {
+      if (!isTmuxInstalled()) {
+        return `tmux is not installed.\n\nInstall with:\n\`\`\`\n${getTmuxInstallInstructions()}\n\`\`\``
+      }
+      
+      const sessions = listTmuxSessions()
+      const claudeSessions = sessions.filter(s => s.startsWith('claude-'))
+      
+      if (claudeSessions.length === 0) {
+        return "No active Claude command sessions."
+      }
+      
+      let output = "# Active Claude Sessions\n\n"
+      for (const session of claudeSessions) {
+        const name = session.split(':')[0]
+        output += `- \`${name}\` - Attach: \`tmux attach -t ${name}\`\n`
+      }
+      output += "\n**To attach:** `tmux attach -t <session-name>`\n"
+      output += "**To kill:** `tmux kill-session -t <session-name>`"
+      
+      return output
+    }
+  })
+  
+  dynamicTools.claude_tmux_kill = tool({
+    description: "Kill a tmux session for a Claude command",
+    args: {
+      session: tool.schema.string().describe("Session name to kill (e.g., 'claude-abc123')")
+    },
+    async execute(args) {
+      if (!isTmuxInstalled()) {
+        return `tmux is not installed.`
+      }
+      
+      const result = killTmuxSession(args.session)
+      if (result.success) {
+        return `Session \`${args.session}\` terminated.`
+      }
+      return `Failed to kill session: ${result.error}`
+    }
+  })
+  
+  dynamicTools.claude_tmux_kill_all = tool({
+    description: "Kill all tmux sessions for Claude commands",
+    args: {},
+    async execute() {
+      if (!isTmuxInstalled()) {
+        return `tmux is not installed.`
+      }
+      
+      const sessions = listTmuxSessions()
+      const claudeSessions = sessions.filter(s => s.startsWith('claude-'))
+      
+      if (claudeSessions.length === 0) {
+        return "No active Claude command sessions to kill."
+      }
+      
+      let killed = 0
+      for (const session of claudeSessions) {
+        const name = session.split(':')[0]
+        const result = killTmuxSession(name)
+        if (result.success) killed++
+      }
+      
+      return `Killed ${killed}/${claudeSessions.length} Claude sessions.`
+    }
+  })
+  
+  // ========================================================================
   // DISCOVERY & REFRESH TOOLS
   // ========================================================================
   
@@ -558,11 +750,12 @@ export const ClaudeMarketplaceBridge = async ({ client, $ }) => {
   // ========================================================================
   
   dynamicTools.claude_run = tool({
-    description: "Run a Claude marketplace command by name. Use this to execute commands like 'commit', 'review-pr', 'code-review', etc. If multiple commands match, shows options.",
+    description: "Run a Claude marketplace command by name. Use this to execute commands like 'commit', 'review-pr', 'code-review', etc. If multiple commands match, shows options. Use interactive=true for commands that need user input (opens in tmux).",
     args: {
       command: tool.schema.string().describe("Command name to run (e.g., 'commit', 'code-review', 'feature-dev')"),
       marketplace: tool.schema.string().optional().describe("Optional: specific marketplace (e.g., 'personal-dev-toolkit', 'claude-code-plugins')"),
-      arguments: tool.schema.string().optional().describe("Optional: arguments to pass to the command")
+      arguments: tool.schema.string().optional().describe("Optional: arguments to pass to the command"),
+      interactive: tool.schema.boolean().optional().describe("Optional: run in interactive tmux session (default: false). Use for commands that need user input.")
     },
     async execute(args) {
       const query = args.command.toLowerCase()
@@ -589,8 +782,9 @@ export const ClaudeMarketplaceBridge = async ({ client, $ }) => {
       const exactMatch = matches.find(m => m.data.basename.toLowerCase() === query)
       const match = exactMatch || matches[0]
       
+      let output = ""
       if (matches.length > 1 && !exactMatch) {
-        let output = `Multiple commands match "${args.command}":\n\n`
+        output = `Multiple commands match "${args.command}":\n\n`
         for (const m of matches.slice(0, 10)) {
           output += `- **${m.data.basename}** (${m.data.marketplace})\n`
         }
@@ -598,7 +792,14 @@ export const ClaudeMarketplaceBridge = async ({ client, $ }) => {
         output += `To use a different one, specify marketplace parameter.\n\n---\n\n`
       }
       
-      // Execute the command
+      // If interactive mode, run via Claude CLI in tmux
+      if (args.interactive) {
+        const cmdArgs = args.arguments ? `"${match.data.basename}" ${args.arguments}` : `"${match.data.basename}"`
+        const result = runClaudeCLIInteractive(cmdArgs)
+        return output + result.output
+      }
+      
+      // Non-interactive: return template for LLM to execute
       let template = match.data.config.template
       if (args.arguments) {
         template = template.replace(/\$ARGUMENTS/g, args.arguments)
@@ -608,7 +809,18 @@ export const ClaudeMarketplaceBridge = async ({ client, $ }) => {
         })
       }
       
-      return `# Command: ${match.data.basename} (${match.data.marketplace})\n\n${template}`
+      return output + `# Command: ${match.data.basename} (${match.data.marketplace})\n\n${template}`
+    }
+  })
+  
+  dynamicTools.claude_interactive = tool({
+    description: "Run any Claude CLI command interactively in a tmux session. Use this when you need the user to interact with Claude's prompts, select options, or provide input.",
+    args: {
+      command: tool.schema.string().describe("Full Claude CLI command (e.g., 'commit', 'review-pr', 'feature-dev --help')")
+    },
+    async execute(args) {
+      const result = runClaudeCLIInteractive(args.command)
+      return result.output
     }
   })
   
