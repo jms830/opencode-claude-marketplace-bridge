@@ -1,5 +1,7 @@
 # Claude Marketplace Bridge Plugin for OpenCode
 
+> **Note**: For a cross-agent solution that works with Claude, OpenCode, Codex, and Gemini, see [agent-plugins](https://github.com/jordan/agent-plugins) - a universal plugin manager that mirrors Claude's plugin system.
+
 This plugin bridges Claude Code's entire plugin/marketplace ecosystem into OpenCode, giving you full access to:
 
 1. **All your Claude marketplaces** (commands, skills, agents)

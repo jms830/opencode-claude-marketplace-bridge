@@ -366,6 +366,8 @@ async function discoverMarketplaces(marketplacesRoot) {
 // Plugin Entry Point
 // ============================================================================
 
+const REGISTER_INDIVIDUAL_TOOLS = false // Set to true to register individual command/skill tools
+
 export const ClaudeMarketplaceBridge = async ({ client, $ }) => {
   const home = process.env.HOME || process.env.USERPROFILE || "/home/jordan"
   const marketplacesRoot = path.join(home, ".claude/plugins/marketplaces")
@@ -862,52 +864,54 @@ export const ClaudeMarketplaceBridge = async ({ client, $ }) => {
   // Skills return their instructions for the LLM to follow
   // ========================================================================
   
-  for (const [toolName, skillData] of skills.entries()) {
-    const { config, marketplace } = skillData
-    const truncatedName = truncateToolName(toolName, 51)  // 64 - 13 ("claude_skill_")
-
-    dynamicTools[`claude_skill_${truncatedName}`] = tool({
-      description: `[Skill: ${marketplace}] ${config.description}`,
-      args: {},
-      async execute() {
-        // Return the skill instructions for the LLM to process
-        return `# Skill: ${config.name}\n\n**Base directory:** ${config.baseDir}\n\n---\n\n${config.instructions}`
-      }
-    })
-  }
+  if (REGISTER_INDIVIDUAL_TOOLS) {
+    for (const [toolName, skillData] of skills.entries()) {
+      const { config, marketplace } = skillData
+      const truncatedName = truncateToolName(toolName, 51)  // 64 - 13 ("claude_skill_")
   
-  // ========================================================================
-  // COMMAND TOOLS (dynamically registered)
-  // Commands return expanded templates for the LLM to execute
-  // ========================================================================
-  
-  for (const [cmdName, cmdData] of commands.entries()) {
-    const { config, marketplace, basename } = cmdData
-    const truncatedName = truncateToolName(cmdName, 53)  // 64 - 11 ("claude_cmd_")
-
-    dynamicTools[`claude_cmd_${truncatedName}`] = tool({
-      description: `[Cmd: ${marketplace}] ${config.description}`,
-      args: {
-        arguments: tool.schema.string().optional().describe("Arguments to pass to the command")
-      },
-      async execute(args) {
-        let template = config.template
-        
-        // Replace $ARGUMENTS placeholder
-        if (args.arguments) {
-          template = template.replace(/\$ARGUMENTS/g, args.arguments)
-          
-          // Replace positional args ($1, $2, etc.)
-          const argParts = args.arguments.split(/\s+/)
-          argParts.forEach((arg, i) => {
-            template = template.replace(new RegExp(`\\$${i + 1}`, 'g'), arg)
-          })
+      dynamicTools[`claude_skill_${truncatedName}`] = tool({
+        description: `[Skill: ${marketplace}] ${config.description}`,
+        args: {},
+        async execute() {
+          // Return the skill instructions for the LLM to process
+          return `# Skill: ${config.name}\n\n**Base directory:** ${config.baseDir}\n\n---\n\n${config.instructions}`
         }
-        
-        // Return the expanded template for the LLM to execute
-        return `# Command: ${basename} (${marketplace})\n\n${template}`
-      }
-    })
+      })
+    }
+    
+    // ========================================================================
+    // COMMAND TOOLS (dynamically registered)
+    // Commands return expanded templates for the LLM to execute
+    // ========================================================================
+    
+    for (const [cmdName, cmdData] of commands.entries()) {
+      const { config, marketplace, basename } = cmdData
+      const truncatedName = truncateToolName(cmdName, 53)  // 64 - 11 ("claude_cmd_")
+  
+      dynamicTools[`claude_cmd_${truncatedName}`] = tool({
+        description: `[Cmd: ${marketplace}] ${config.description}`,
+        args: {
+          arguments: tool.schema.string().optional().describe("Arguments to pass to the command")
+        },
+        async execute(args) {
+          let template = config.template
+          
+          // Replace $ARGUMENTS placeholder
+          if (args.arguments) {
+            template = template.replace(/\$ARGUMENTS/g, args.arguments)
+            
+            // Replace positional args ($1, $2, etc.)
+            const argParts = args.arguments.split(/\s+/)
+            argParts.forEach((arg, i) => {
+              template = template.replace(new RegExp(`\\$${i + 1}`, 'g'), arg)
+            })
+          }
+          
+          // Return the expanded template for the LLM to execute
+          return `# Command: ${basename} (${marketplace})\n\n${template}`
+        }
+      })
+    }
   }
   
   // Note: Config hook doesn't work reliably due to caching order in OpenCode.
