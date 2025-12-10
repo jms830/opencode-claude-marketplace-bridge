@@ -375,7 +375,10 @@ export const ClaudeMarketplaceBridge = async ({ client, $ }) => {
   // Discover on initialization
   const { commands, skills } = await discoverMarketplaces(marketplacesRoot)
   
-  console.log(`[claude-bridge] Discovered ${commands.size} commands and ${skills.size} skills from Claude marketplaces`)
+  // Only log discovery count when individual tools are registered
+  if (REGISTER_INDIVIDUAL_TOOLS) {
+    console.log(`[claude-bridge] Registered ${commands.size} command tools and ${skills.size} skill tools`)
+  }
   
   // Build dynamic tools object
   const dynamicTools = {}
