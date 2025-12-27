@@ -1,52 +1,43 @@
-# Claude Marketplace Bridge Plugin for OpenCode
+# Claude Management Tools for OpenCode
 
-> **Note**: For a cross-agent solution that works with Claude, OpenCode, Codex, and Gemini, see [agent-plugins](https://github.com/jordan/agent-plugins) - a universal plugin manager that mirrors Claude's plugin system.
+> **Architecture Change (Dec 2024):** With [oh-my-opencode](https://github.com/code-yeongyu/oh-my-opencode) v2.6+ now loading Claude plugins directly, this plugin's role has shifted from "content bridge" to **"management tools"**. See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for details.
 
-This plugin bridges Claude Code's entire plugin/marketplace ecosystem into OpenCode, giving you full access to:
+## What This Plugin Does
 
-1. **All your Claude marketplaces** (commands, skills, agents)
-2. **Claude CLI management tools** (install, uninstall, update marketplaces/plugins)
-3. **MCP server management** (add, remove, list MCP servers)
+This plugin provides **Claude CLI management tools** from within OpenCode, letting you:
+
+1. **Manage Marketplaces** - Add, update, remove Claude marketplaces
+2. **Install/Uninstall Plugins** - Manage Claude plugins without leaving OpenCode
+3. **Configure MCP Servers** - Add/remove MCP servers via Claude CLI
+4. **Access Claude's `/plugin` TUI** - Launch interactive sessions via tmux
+5. **Search & Discover** - Find plugins across marketplaces before installing
+
+## Do You Need This Plugin?
+
+| Your Setup | This Plugin | Recommendation |
+|------------|-------------|----------------|
+| oh-my-opencode + happy switching to Claude CLI | **Optional** | Skip it |
+| oh-my-opencode + want management from OpenCode | **Useful** | Install it |
+| OpenCode without oh-my-opencode | **Required** | Install both |
+
+**If you use oh-my-opencode v2.6+**, it already handles:
+- ✅ Loading skills from `~/.claude/skills/`
+- ✅ Loading commands from `~/.claude/commands/`
+- ✅ Loading agents from `~/.claude/agents/`
+- ✅ Loading plugins from `~/.claude/plugins/`
+- ✅ MCP configuration from `.mcp.json`
+- ✅ Hooks from `settings.json`
+
+**This plugin adds** what oh-my-opencode doesn't do:
+- 🔧 `claude plugin install/uninstall` from OpenCode
+- 🔧 `claude marketplace add/update` from OpenCode
+- 🔧 `claude mcp add/remove` from OpenCode
+- 🖥️ Interactive `/plugin` TUI access via tmux
+- 🔍 Search across available (not-yet-installed) plugins
 
 ## Features
 
-### Dynamic Content Discovery
-- Scans `~/.claude/plugins/marketplaces/` on startup
-- Registers all commands from `commands/` and `workflows/` directories as tools
-- Registers all `SKILL.md` skills as tools
-- No file copying or symlinking - pure dynamic discovery
-- Always current (reads files at runtime)
-
-### Claude CLI Management
-Full access to Claude Code's CLI commands from within OpenCode:
-
-**Marketplace Management:**
-- `claude_marketplace_list` - List all configured marketplaces
-- `claude_marketplace_add` - Add a marketplace from GitHub/URL/path
-- `claude_marketplace_remove` - Remove a marketplace
-- `claude_marketplace_update` - Update marketplace(s) from source
-
-**Plugin Management:**
-- `claude_plugin_install` - Install a plugin from marketplaces
-- `claude_plugin_uninstall` - Uninstall a plugin
-- `claude_plugin_enable` - Enable a disabled plugin
-- `claude_plugin_disable` - Disable a plugin
-- `claude_plugin_validate` - Validate plugin/marketplace manifest
-
-**MCP Server Management:**
-- `claude_mcp_list` - List configured MCP servers
-- `claude_mcp_add` - Add an MCP server
-- `claude_mcp_remove` - Remove an MCP server
-- `claude_mcp_get` - Get details about an MCP server
-
-### Search & Discovery
-- `claude_marketplace_refresh` - Rediscover all content
-- `claude_search_commands` - Search commands by name/description
-- `claude_search_skills` - Search skills by name/description
-
-## Usage Examples
-
-### Managing Marketplaces
+### Marketplace Management
 
 ```
 "List my Claude marketplaces"
@@ -59,133 +50,179 @@ Full access to Claude Code's CLI commands from within OpenCode:
 → Uses claude_marketplace_update
 ```
 
-### Installing Plugins
+- `claude_marketplace_list` - List all configured marketplaces
+- `claude_marketplace_add` - Add a marketplace from GitHub/URL/path
+- `claude_marketplace_remove` - Remove a marketplace
+- `claude_marketplace_update` - Update marketplace(s) from source
+
+### Plugin Management
 
 ```
-"Install the brand-guidelines plugin"
+"Install the code-review plugin"
 → Uses claude_plugin_install
 
-"Install code-review from personal-dev-toolkit"
-→ Uses claude_plugin_install with plugin: "code-review@personal-dev-toolkit"
+"Uninstall brand-guidelines"
+→ Uses claude_plugin_uninstall
 ```
 
-### Using Commands & Skills
+- `claude_plugin_install` - Install a plugin (use `plugin@marketplace` for specific source)
+- `claude_plugin_uninstall` - Uninstall a plugin
+- `claude_plugin_enable` - Enable a disabled plugin
+- `claude_plugin_disable` - Disable a plugin
+- `claude_plugin_validate` - Validate a plugin manifest
+
+### MCP Server Management
 
 ```
-"Search for code review commands"
-→ Uses claude_search_commands with query: "code review"
-
-"Use the brand guidelines skill"
-→ Uses claude_skill_brand_guidelines_anthropic_agent_skills
-
-"Run the commit command from my personal toolkit"
-→ Uses claude_cmd_commit@personal_dev_toolkit
-```
-
-### Managing MCP Servers
-
-```
-"List my MCP servers"
-→ Uses claude_mcp_list
-
 "Add the Sentry MCP server"
 → Uses claude_mcp_add
+
+"List my MCP servers"
+→ Uses claude_mcp_list
 ```
 
-## Tool Naming Convention
+- `claude_mcp_list` - List configured MCP servers
+- `claude_mcp_add` - Add an MCP server (stdio/http/sse)
+- `claude_mcp_remove` - Remove an MCP server
+- `claude_mcp_get` - Get details about a specific server
 
-**Commands:** `claude_cmd_<command_name>@<marketplace>`
-- Example: `claude_cmd_code_review@personal_dev_toolkit`
+### Interactive TUI Access (via tmux)
 
-**Skills:** `claude_skill_<skill_name>_<marketplace>`
-- Example: `claude_skill_brand_guidelines_anthropic_agent_skills`
+**The killer feature**: Access Claude's `/plugin` browser from OpenCode!
 
-**Management:** `claude_<category>_<action>`
-- Example: `claude_marketplace_add`, `claude_plugin_install`, `claude_mcp_list`
+```
+"Open Claude's plugin browser"
+→ Uses claude_interactive with command: "/plugin"
+→ Opens in tmux session, attach with: tmux attach -t claude-xxx
+```
 
-## Requirements
+- `claude_interactive` - Run any Claude CLI command interactively
+- `claude_run` - Run marketplace commands (supports `interactive=true`)
+- `claude_tmux_list` - List active Claude tmux sessions
+- `claude_tmux_kill` - Kill a specific session
+- `claude_tmux_kill_all` - Kill all Claude sessions
 
-- Claude Code CLI installed (`claude` command available)
-- Claude marketplaces directory at `~/.claude/plugins/marketplaces/`
-- Dependencies: `gray-matter` (for parsing markdown frontmatter)
+**Requires tmux** - Install with:
+- macOS: `brew install tmux`
+- Ubuntu/Debian: `sudo apt-get install tmux`
+- Fedora: `sudo dnf install tmux`
 
-## How It Works
+### Search & Discovery
 
-1. **On OpenCode startup:**
-   - Scans all marketplaces under `~/.claude/plugins/marketplaces/`
-   - Parses all `.md` files in `commands/` and `workflows/` directories
-   - Parses all `SKILL.md` files
-   - Registers everything as dynamic tools
+```
+"Search for code review plugins"
+→ Uses claude_search_commands with query: "code review"
 
-2. **For CLI commands:**
-   - Wraps the `claude` CLI using `execSync`
-   - Captures output and returns it to OpenCode
-   - Handles errors gracefully
+"What skills are available?"
+→ Uses claude_search_skills
+```
 
-3. **For content execution:**
-   - Uses OpenCode's `client.message.create()` with `noReply: true`
-   - Content persists in conversation (not purged like tool responses)
-   - Supports $ARGUMENTS and positional parameter substitution
-
-## Comparison: Direct Claude vs This Plugin
-
-| Feature | Direct Claude CLI | This Plugin |
-|---------|------------------|-------------|
-| Marketplace management | ✅ Full | ✅ Full (via CLI wrapper) |
-| Plugin management | ✅ Full | ✅ Full (via CLI wrapper) |
-| MCP management | ✅ Full | ✅ Full (via CLI wrapper) |
-| Use commands in conversation | ❌ Must run separately | ✅ Integrated as tools |
-| Use skills in conversation | ❌ Must run separately | ✅ Integrated as tools |
-| Search content | ❌ Manual | ✅ Built-in search |
-| Works in OpenCode TUI | ❌ No | ✅ Yes |
+- `claude_search_commands` - Search commands by name/description
+- `claude_search_skills` - Search skills by name/description
+- `claude_marketplace_refresh` - Rediscover all available content
+- `claude_list` - List all commands grouped by marketplace
 
 ## Installation
 
-The plugin is installed at:
-```
-~/.config/opencode/plugin/claude-marketplace-bridge.js
+
+### With oh-my-opencode (Recommended)
+
+1. **Install oh-my-opencode** (handles content loading):
+   ```json
+   // ~/.config/opencode/opencode.json
+   {
+     "plugin": ["oh-my-opencode@latest"]
+   }
+   ```
+
+2. **Add this plugin** (for management tools):
+   ```bash
+   cd ~/.config/opencode
+   npm install opencode-claude-marketplace-bridge
+   ```
+
+3. **Register in opencode.json**:
+   ```json
+   {
+     "plugin": [
+       "oh-my-opencode@latest",
+       "./node_modules/opencode-claude-marketplace-bridge"
+     ]
+   }
+   ```
+
+### Without oh-my-opencode
+
+If you're not using oh-my-opencode, this plugin provides both content discovery AND management. However, we recommend using oh-my-opencode for the best experience.
+
+## Requirements
+
+- **Claude Code CLI** installed (`claude` command available)
+- **tmux** (optional, for interactive features)
+- **Node.js** 18+
+
+Verify Claude is installed:
+```bash
+claude --version
+claude doctor
 ```
 
-Dependencies in `~/.config/opencode/package.json`:
-```json
-{
-  "dependencies": {
-    "gray-matter": "^4.0.3"
-  }
-}
+## Architecture
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                        Claude Code                               │
+│  Source of truth: ~/.claude/plugins/, skills/, commands/        │
+└─────────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+┌─────────────────────────────────────────────────────────────────┐
+│                      oh-my-opencode                              │
+│  Loads content into OpenCode (skills, commands, agents, MCP)    │
+└─────────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+┌─────────────────────────────────────────────────────────────────┐
+│              This Plugin (Management Tools)                      │
+│  CLI wrappers + Interactive TUI + Search/Discovery              │
+└─────────────────────────────────────────────────────────────────┘
 ```
 
-OpenCode automatically loads plugins from the `plugin/` directory.
+See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for comprehensive documentation.
+
+## Comparison: What Each Project Does
+
+| Capability | Claude Code | oh-my-opencode | This Plugin |
+|------------|-------------|----------------|-------------|
+| Plugin TUI browser | ✅ `/plugin` | ❌ | ✅ via tmux |
+| Load skills/commands | ✅ | ✅ | ❌ (deferred) |
+| Load plugins | ✅ | ✅ v2.6+ | ❌ (deferred) |
+| Install plugins | ✅ CLI | ❌ | ✅ wrapper |
+| Manage marketplaces | ✅ CLI | ❌ | ✅ wrapper |
+| Manage MCP | ✅ CLI | ❌ | ✅ wrapper |
+| Search plugins | ✅ TUI | ❌ | ✅ tools |
+
+## Related Projects
+
+| Project | Role | URL |
+|---------|------|-----|
+| Claude Code | Primary plugin manager | https://claude.ai/code |
+| oh-my-opencode | Content loader (recommended) | https://github.com/code-yeongyu/oh-my-opencode |
+| OpenCode | Open-source AI coding agent | https://github.com/sst/opencode |
 
 ## Troubleshooting
 
 **Plugin not loading?**
 - Check for `[claude-bridge]` messages in console
-- Verify the plugin file exists
-- Ensure `gray-matter` is installed: `cd ~/.config/opencode && npm install gray-matter`
+- Ensure dependencies installed: `npm install`
 
 **Claude CLI commands failing?**
-- Verify Claude Code is installed: `claude --version`
-- Check Claude authentication: `claude doctor`
+- Verify Claude is installed: `claude --version`
+- Check authentication: `claude doctor`
 
-**Content not discovered?**
-- Verify marketplaces exist: `ls ~/.claude/plugins/marketplaces/`
-- Check marketplace structure has `commands/` or `workflows/` directories
-- Use `claude_marketplace_refresh` to see what's found
-
-**After installing new plugins:**
-- Restart OpenCode to pick up new content
-- Or use `claude_marketplace_refresh` to see new content (requires restart to activate tools)
-
-## Contributing
-
-This plugin can be published to npm as `opencode-claude-bridge` for community use. The core concept is:
-
-1. Use Claude Code CLI for marketplace/plugin management
-2. Dynamically discover and register content as OpenCode tools
-3. Bridge the two ecosystems seamlessly
-
-Pull requests welcome!
+**Interactive commands not working?**
+- Install tmux (see requirements above)
+- Check for existing sessions: `tmux list-sessions`
 
 ## License
 
