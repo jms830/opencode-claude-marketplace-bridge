@@ -1,77 +1,8 @@
-// Claude Marketplace Bridge Plugin for OpenCode
-// Bridges Claude Code's plugin/marketplace ecosystem into OpenCode
-// 
-// Features:
-// - Discovers and registers commands/skills/agents from Claude marketplaces
-// - Provides tools to manage Claude marketplaces (add, remove, update, list)
-// - Provides tools to manage Claude plugins (install, uninstall, enable, disable)
-// - Wraps the `claude` CLI for full marketplace management from within OpenCode
-// - No file copying or symlinking - pure dynamic discovery
+// Claude Plugin Browser for OpenCode
+// Launches Claude's /plugin marketplace TUI natively
 
-import fs from "fs/promises"
-import path from "path"
 import { tool } from "@opencode-ai/plugin/tool"
-import matter from "gray-matter"
 import { execSync } from "child_process"
-
-// ============================================================================
-// Utility Functions
-// ============================================================================
-
-async function exists(p) {
-  try {
-    await fs.access(p)
-    return true
-  } catch {
-    return false
-  }
-}
-
-async function* walk(dir) {
-  let entries
-  try {
-    entries = await fs.readdir(dir, { withFileTypes: true })
-  } catch {
-    return
-  }
-  for (const e of entries) {
-    const full = path.join(dir, e.name)
-    if (e.isDirectory()) {
-      yield* walk(full)
-    } else if (e.isFile()) {
-      yield full
-    }
-  }
-}
-
-function slug(s) {
-  return s.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "")
-}
-
-function truncateToolName(name, maxLen) {
-  if (name.length <= maxLen) return name
-  return name.substring(0, maxLen)
-}
-
-function getMarketplaceName(filePath, marketplacesRoot) {
-  const rel = path.relative(marketplacesRoot, filePath).split(path.sep)
-  return rel.length ? rel[0] : "unknown"
-}
-
-function isCommandFile(filePath) {
-  if (!filePath.endsWith(".md")) return false
-  const p = filePath.replace(/\\/g, "/")
-  if (p.toLowerCase().endsWith("/readme.md")) return false
-  return p.includes("/commands/") || p.includes("/workflows/")
-}
-
-function isSkillFile(filePath) {
-  return path.basename(filePath).toUpperCase() === "SKILL.md"
-}
-
-// ============================================================================
-// tmux Support for Interactive Commands
-// ============================================================================
 
 function isTmuxInstalled() {
   try {
@@ -84,844 +15,116 @@ function isTmuxInstalled() {
 
 function getTmuxInstallInstructions() {
   const platform = process.platform
-  if (platform === "darwin") {
-    return "brew install tmux"
-  } else if (platform === "linux") {
-    // Try to detect package manager
-    try {
-      execSync("which apt-get", { stdio: ["pipe", "pipe", "pipe"] })
-      return "sudo apt-get install tmux"
-    } catch {}
-    try {
-      execSync("which dnf", { stdio: ["pipe", "pipe", "pipe"] })
-      return "sudo dnf install tmux"
-    } catch {}
-    try {
-      execSync("which yum", { stdio: ["pipe", "pipe", "pipe"] })
-      return "sudo yum install tmux"
-    } catch {}
-    try {
-      execSync("which pacman", { stdio: ["pipe", "pipe", "pipe"] })
-      return "sudo pacman -S tmux"
-    } catch {}
-    return "Install tmux using your package manager (apt, dnf, yum, pacman, etc.)"
+  if (platform === "darwin") return "brew install tmux"
+  if (platform === "linux") {
+    try { execSync("which apt-get", { stdio: ["pipe", "pipe", "pipe"] }); return "sudo apt-get install tmux" } catch {}
+    try { execSync("which dnf", { stdio: ["pipe", "pipe", "pipe"] }); return "sudo dnf install tmux" } catch {}
+    try { execSync("which pacman", { stdio: ["pipe", "pipe", "pipe"] }); return "sudo pacman -S tmux" } catch {}
+    return "Install tmux using your package manager"
   }
   return "Install tmux for your system"
 }
 
-function generateTmuxSessionName() {
-  return `claude-${Date.now().toString(36)}`
-}
-
-function runInTmux(command, sessionName) {
+function launchPluginBrowser() {
+  const sessionName = `claude-plugins-${Date.now().toString(36)}`
+  
   try {
-    // Create a detached tmux session running the command
-    // After command completes, show a message and wait for user to press a key
-    const wrappedCmd = `${command}; echo ""; echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"; echo "Command completed. Press any key to close..."; read -n 1`
-    execSync(`tmux new-session -d -s "${sessionName}" bash -c '${wrappedCmd.replace(/'/g, "'\\''")}'`, {
+    execSync(`tmux new-session -d -s "${sessionName}" 'claude "/plugin"'`, {
       encoding: "utf-8",
       stdio: ["pipe", "pipe", "pipe"]
     })
-    return { 
-      success: true, 
-      sessionName,
-      message: `Interactive session started in tmux.\n\n**To interact with the command, run:**\n\`\`\`\ntmux attach -t ${sessionName}\n\`\`\`\n\n**Tips:**\n- Detach without closing: \`Ctrl+b\` then \`d\`\n- Kill session: \`tmux kill-session -t ${sessionName}\``
-    }
-  } catch (err) {
-    return { 
-      success: false, 
-      error: err.message 
-    }
-  }
-}
-
-function listTmuxSessions() {
-  try {
-    const result = execSync("tmux list-sessions 2>/dev/null", { 
-      encoding: "utf-8", 
-      stdio: ["pipe", "pipe", "pipe"] 
-    })
-    return result.trim().split('\n').filter(Boolean)
-  } catch {
-    return []
-  }
-}
-
-function killTmuxSession(sessionName) {
-  try {
-    execSync(`tmux kill-session -t "${sessionName}"`, {
-      encoding: "utf-8",
-      stdio: ["pipe", "pipe", "pipe"]
-    })
-    return { success: true }
+    return { success: true, sessionName }
   } catch (err) {
     return { success: false, error: err.message }
   }
 }
 
-// ============================================================================
-// Claude CLI Wrapper
-// ============================================================================
-
-function runClaudeCLI(args, timeout = 30000) {
+function listClaudeSessions() {
   try {
-    const result = execSync(`claude ${args}`, {
-      encoding: "utf-8",
-      timeout,
-      stdio: ["pipe", "pipe", "pipe"]
-    })
-    return { success: true, output: result.trim() }
-  } catch (err) {
-    const stderr = err.stderr?.toString() || ""
-    const stdout = err.stdout?.toString() || ""
-    return { 
-      success: false, 
-      output: stderr || stdout || err.message,
-      error: err.message
-    }
+    const result = execSync("tmux list-sessions 2>/dev/null", { encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] })
+    return result.trim().split('\n').filter(s => s.startsWith('claude-'))
+  } catch {
+    return []
   }
 }
 
-function runClaudeCLIInteractive(args) {
-  if (!isTmuxInstalled()) {
-    return {
-      success: false,
-      needsTmux: true,
-      output: `**tmux is required for interactive commands but is not installed.**\n\nInstall it with:\n\`\`\`\n${getTmuxInstallInstructions()}\n\`\`\`\n\nThen try again.`
-    }
+function killSession(name) {
+  try {
+    execSync(`tmux kill-session -t "${name}"`, { encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] })
+    return true
+  } catch {
+    return false
   }
-  
-  const sessionName = generateTmuxSessionName()
-  const result = runInTmux(`claude ${args}`, sessionName)
-  
-  if (result.success) {
-    return {
-      success: true,
-      interactive: true,
-      sessionName: result.sessionName,
-      output: result.message
-    }
-  }
-  
+}
+
+export const ClaudeMarketplaceBridge = async () => {
   return {
-    success: false,
-    output: `Failed to start interactive session: ${result.error}`
-  }
-}
-
-// ============================================================================
-// Parsing Functions
-// ============================================================================
-
-/**
- * Fallback frontmatter parser for files with YAML syntax issues
- * Extracts key-value pairs line by line, handles unquoted special chars
- */
-function parseFrontmatterLoose(content) {
-  const match = content.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n([\s\S]*)$/)
-  if (!match) {
-    return { data: {}, content: content }
-  }
-  
-  const frontmatter = match[1]
-  const body = match[2]
-  const data = {}
-  
-  for (const line of frontmatter.split('\n')) {
-    // Match key: value, handling colons in the value
-    const keyMatch = line.match(/^([a-zA-Z_-]+):\s*(.*)$/)
-    if (keyMatch) {
-      const key = keyMatch[1].trim()
-      let value = keyMatch[2].trim()
-      // Remove surrounding quotes if present
-      if ((value.startsWith('"') && value.endsWith('"')) || 
-          (value.startsWith("'") && value.endsWith("'"))) {
-        value = value.slice(1, -1)
-      }
-      data[key] = value
-    }
-  }
-  
-  return { data, content: body }
-}
-
-async function parseCommand(filePath) {
-  try {
-    const content = await fs.readFile(filePath, "utf-8")
-    let data, template
-    
-    try {
-      // Try strict YAML parsing first
-      const parsed = matter(content)
-      data = parsed.data
-      template = parsed.content
-    } catch (yamlErr) {
-      // Fallback to loose parsing for files with YAML issues
-      const parsed = parseFrontmatterLoose(content)
-      data = parsed.data
-      template = parsed.content
-    }
-    
-    return {
-      template: template.trim(),
-      description: data.description || "Command from Claude marketplace",
-      agent: data.agent,
-      model: data.model,
-      subtask: data.subtask
-    }
-  } catch (err) {
-    console.error(`[claude-bridge] Failed to parse command ${filePath}:`, err.message)
-    return null
-  }
-}
-
-async function parseSkill(filePath) {
-  try {
-    const content = await fs.readFile(filePath, "utf-8")
-    let data, instructions
-    
-    try {
-      // Try strict YAML parsing first
-      const parsed = matter(content)
-      data = parsed.data
-      instructions = parsed.content
-    } catch (yamlErr) {
-      // Fallback to loose parsing for files with YAML issues
-      const parsed = parseFrontmatterLoose(content)
-      data = parsed.data
-      instructions = parsed.content
-    }
-    
-    const skillDir = path.dirname(filePath)
-    const skillName = data.name || path.basename(skillDir)
-    
-    if (!data.description || data.description.length < 10) {
-      return null
-    }
-    
-    return {
-      name: skillName,
-      description: data.description,
-      instructions: instructions.trim(),
-      baseDir: skillDir,
-      allowedTools: data["allowed-tools"] || [],
-      license: data.license,
-      metadata: data.metadata || {}
-    }
-  } catch (err) {
-    console.error(`[claude-bridge] Failed to parse skill ${filePath}:`, err.message)
-    return null
-  }
-}
-
-// ============================================================================
-// Discovery Functions
-// ============================================================================
-
-async function discoverMarketplaces(marketplacesRoot) {
-  const commands = new Map()
-  const skills = new Map()
-  
-  if (!await exists(marketplacesRoot)) {
-    console.log(`[claude-bridge] Claude marketplaces directory not found: ${marketplacesRoot}`)
-    return { commands, skills }
-  }
-  
-  for await (const file of walk(marketplacesRoot)) {
-    const marketplace = getMarketplaceName(file, marketplacesRoot)
-    
-    if (isCommandFile(file)) {
-      const basename = path.basename(file, ".md")
-      const commandName = slug(basename)
-      const namespacedName = `${commandName}__${slug(marketplace)}`
-      
-      const config = await parseCommand(file)
-      if (config) {
-        commands.set(namespacedName, {
-          filePath: file,
-          marketplace,
-          basename,
-          config
-        })
-      }
-    }
-    
-    if (isSkillFile(file)) {
-      const skillConfig = await parseSkill(file)
-      if (skillConfig) {
-        const namespacedName = `${slug(skillConfig.name)}_${slug(marketplace)}`
-        skills.set(namespacedName, {
-          filePath: file,
-          marketplace,
-          config: skillConfig
-        })
-      }
-    }
-  }
-  
-  return { commands, skills }
-}
-
-// ============================================================================
-// Plugin Entry Point
-// ============================================================================
-
-const REGISTER_INDIVIDUAL_TOOLS = false // Set to true to register individual command/skill tools
-
-export const ClaudeMarketplaceBridge = async ({ client, $ }) => {
-  const home = process.env.HOME || process.env.USERPROFILE || "/home/jordan"
-  const marketplacesRoot = path.join(home, ".claude/plugins/marketplaces")
-  
-  // Discover on initialization
-  const { commands, skills } = await discoverMarketplaces(marketplacesRoot)
-  
-  // Only log discovery count when individual tools are registered
-  if (REGISTER_INDIVIDUAL_TOOLS) {
-    console.log(`[claude-bridge] Registered ${commands.size} command tools and ${skills.size} skill tools`)
-  }
-  
-  // Build dynamic tools object
-  const dynamicTools = {}
-  
-  // ========================================================================
-  // MARKETPLACE MANAGEMENT TOOLS (wrapping claude CLI)
-  // ========================================================================
-  
-  dynamicTools.claude_marketplace_list = tool({
-    description: "List all configured Claude Code marketplaces",
-    args: {},
-    async execute() {
-      const result = runClaudeCLI("plugin marketplace list")
-      return result.output
-    }
-  })
-  
-  dynamicTools.claude_marketplace_add = tool({
-    description: "Add a new Claude Code marketplace from a URL, path, or GitHub repo (e.g., 'anthropics/skills' or 'https://github.com/user/repo.git')",
-    args: {
-      source: tool.schema.string().describe("GitHub repo (user/repo), git URL, or local path")
-    },
-    async execute(args) {
-      const result = runClaudeCLI(`plugin marketplace add "${args.source}"`)
-      if (result.success) {
-        return `Successfully added marketplace: ${args.source}\n\n${result.output}`
-      }
-      return `Failed to add marketplace: ${result.output}`
-    }
-  })
-  
-  dynamicTools.claude_marketplace_remove = tool({
-    description: "Remove a configured Claude Code marketplace",
-    args: {
-      name: tool.schema.string().describe("Name of the marketplace to remove")
-    },
-    async execute(args) {
-      const result = runClaudeCLI(`plugin marketplace remove "${args.name}"`)
-      if (result.success) {
-        return `Successfully removed marketplace: ${args.name}\n\n${result.output}`
-      }
-      return `Failed to remove marketplace: ${result.output}`
-    }
-  })
-  
-  dynamicTools.claude_marketplace_update = tool({
-    description: "Update Claude Code marketplace(s) from their source. Updates all if no name specified.",
-    args: {
-      name: tool.schema.string().optional().describe("Name of marketplace to update (optional, updates all if omitted)")
-    },
-    async execute(args) {
-      const cmd = args.name 
-        ? `plugin marketplace update "${args.name}"`
-        : "plugin marketplace update"
-      const result = runClaudeCLI(cmd, 60000) // longer timeout for updates
-      return result.output
-    }
-  })
-  
-  // ========================================================================
-  // PLUGIN MANAGEMENT TOOLS (wrapping claude CLI)
-  // ========================================================================
-  
-  dynamicTools.claude_plugin_install = tool({
-    description: "Install a plugin from Claude Code marketplaces. Use plugin@marketplace for specific marketplace.",
-    args: {
-      plugin: tool.schema.string().describe("Plugin name (or plugin@marketplace for specific source)")
-    },
-    async execute(args) {
-      const result = runClaudeCLI(`plugin install "${args.plugin}"`, 60000)
-      if (result.success) {
-        return `Successfully installed plugin: ${args.plugin}\n\n${result.output}\n\nRestart OpenCode to activate new commands/skills.`
-      }
-      return `Failed to install plugin: ${result.output}`
-    }
-  })
-  
-  dynamicTools.claude_plugin_uninstall = tool({
-    description: "Uninstall an installed Claude Code plugin",
-    args: {
-      plugin: tool.schema.string().describe("Plugin name to uninstall")
-    },
-    async execute(args) {
-      const result = runClaudeCLI(`plugin uninstall "${args.plugin}"`)
-      if (result.success) {
-        return `Successfully uninstalled plugin: ${args.plugin}\n\n${result.output}`
-      }
-      return `Failed to uninstall plugin: ${result.output}`
-    }
-  })
-  
-  dynamicTools.claude_plugin_enable = tool({
-    description: "Enable a disabled Claude Code plugin",
-    args: {
-      plugin: tool.schema.string().describe("Plugin name to enable")
-    },
-    async execute(args) {
-      const result = runClaudeCLI(`plugin enable "${args.plugin}"`)
-      return result.output
-    }
-  })
-  
-  dynamicTools.claude_plugin_disable = tool({
-    description: "Disable an enabled Claude Code plugin",
-    args: {
-      plugin: tool.schema.string().describe("Plugin name to disable")
-    },
-    async execute(args) {
-      const result = runClaudeCLI(`plugin disable "${args.plugin}"`)
-      return result.output
-    }
-  })
-  
-  dynamicTools.claude_plugin_validate = tool({
-    description: "Validate a Claude Code plugin or marketplace manifest",
-    args: {
-      path: tool.schema.string().describe("Path to plugin or marketplace to validate")
-    },
-    async execute(args) {
-      const result = runClaudeCLI(`plugin validate "${args.path}"`)
-      return result.output
-    }
-  })
-  
-  // ========================================================================
-  // MCP SERVER MANAGEMENT TOOLS (wrapping claude CLI)
-  // ========================================================================
-  
-  dynamicTools.claude_mcp_list = tool({
-    description: "List all configured MCP servers in Claude Code",
-    args: {},
-    async execute() {
-      const result = runClaudeCLI("mcp list")
-      return result.output
-    }
-  })
-  
-  dynamicTools.claude_mcp_add = tool({
-    description: "Add an MCP server to Claude Code",
-    args: {
-      name: tool.schema.string().describe("Name for the MCP server"),
-      command_or_url: tool.schema.string().describe("Command to run or URL for HTTP/SSE server"),
-      transport: tool.schema.enum(["stdio", "http", "sse"]).optional().describe("Transport type (default: stdio)"),
-      args: tool.schema.string().optional().describe("Additional arguments for the command")
-    },
-    async execute(args) {
-      let cmd = `mcp add`
-      if (args.transport) {
-        cmd += ` --transport ${args.transport}`
-      }
-      cmd += ` "${args.name}" "${args.command_or_url}"`
-      if (args.args) {
-        cmd += ` ${args.args}`
-      }
-      const result = runClaudeCLI(cmd)
-      return result.output
-    }
-  })
-  
-  dynamicTools.claude_mcp_remove = tool({
-    description: "Remove an MCP server from Claude Code",
-    args: {
-      name: tool.schema.string().describe("Name of the MCP server to remove")
-    },
-    async execute(args) {
-      const result = runClaudeCLI(`mcp remove "${args.name}"`)
-      return result.output
-    }
-  })
-  
-  dynamicTools.claude_mcp_get = tool({
-    description: "Get details about a specific MCP server",
-    args: {
-      name: tool.schema.string().describe("Name of the MCP server")
-    },
-    async execute(args) {
-      const result = runClaudeCLI(`mcp get "${args.name}"`)
-      return result.output
-    }
-  })
-  
-  // ========================================================================
-  // TMUX SESSION MANAGEMENT TOOLS
-  // ========================================================================
-  
-  dynamicTools.claude_tmux_list = tool({
-    description: "List active tmux sessions for Claude commands",
-    args: {},
-    async execute() {
-      if (!isTmuxInstalled()) {
-        return `tmux is not installed.\n\nInstall with:\n\`\`\`\n${getTmuxInstallInstructions()}\n\`\`\``
-      }
-      
-      const sessions = listTmuxSessions()
-      const claudeSessions = sessions.filter(s => s.startsWith('claude-'))
-      
-      if (claudeSessions.length === 0) {
-        return "No active Claude command sessions."
-      }
-      
-      let output = "# Active Claude Sessions\n\n"
-      for (const session of claudeSessions) {
-        const name = session.split(':')[0]
-        output += `- \`${name}\` - Attach: \`tmux attach -t ${name}\`\n`
-      }
-      output += "\n**To attach:** `tmux attach -t <session-name>`\n"
-      output += "**To kill:** `tmux kill-session -t <session-name>`"
-      
-      return output
-    }
-  })
-  
-  dynamicTools.claude_tmux_kill = tool({
-    description: "Kill a tmux session for a Claude command",
-    args: {
-      session: tool.schema.string().describe("Session name to kill (e.g., 'claude-abc123')")
-    },
-    async execute(args) {
-      if (!isTmuxInstalled()) {
-        return `tmux is not installed.`
-      }
-      
-      const result = killTmuxSession(args.session)
-      if (result.success) {
-        return `Session \`${args.session}\` terminated.`
-      }
-      return `Failed to kill session: ${result.error}`
-    }
-  })
-  
-  dynamicTools.claude_tmux_kill_all = tool({
-    description: "Kill all tmux sessions for Claude commands",
-    args: {},
-    async execute() {
-      if (!isTmuxInstalled()) {
-        return `tmux is not installed.`
-      }
-      
-      const sessions = listTmuxSessions()
-      const claudeSessions = sessions.filter(s => s.startsWith('claude-'))
-      
-      if (claudeSessions.length === 0) {
-        return "No active Claude command sessions to kill."
-      }
-      
-      let killed = 0
-      for (const session of claudeSessions) {
-        const name = session.split(':')[0]
-        const result = killTmuxSession(name)
-        if (result.success) killed++
-      }
-      
-      return `Killed ${killed}/${claudeSessions.length} Claude sessions.`
-    }
-  })
-  
-  // ========================================================================
-  // DISCOVERY & REFRESH TOOLS
-  // ========================================================================
-  
-  dynamicTools.claude_marketplace_refresh = tool({
-    description: "Refresh and rediscover Claude marketplace commands and skills (shows what's available)",
-    args: {},
-    async execute() {
-      const { commands: newCmds, skills: newSkills } = await discoverMarketplaces(marketplacesRoot)
-      
-      let output = `# Claude Marketplace Discovery\n\n`
-      output += `**Commands:** ${newCmds.size}\n`
-      output += `**Skills:** ${newSkills.size}\n\n`
-      
-      // Group by marketplace
-      const byMarketplace = {}
-      for (const [name, data] of newCmds) {
-        const mp = data.marketplace
-        if (!byMarketplace[mp]) byMarketplace[mp] = { commands: [], skills: [] }
-        byMarketplace[mp].commands.push(data.basename)
-      }
-      for (const [name, data] of newSkills) {
-        const mp = data.marketplace
-        if (!byMarketplace[mp]) byMarketplace[mp] = { commands: [], skills: [] }
-        byMarketplace[mp].skills.push(data.config.name)
-      }
-      
-      for (const [mp, content] of Object.entries(byMarketplace)) {
-        output += `## ${mp}\n`
-        if (content.commands.length) {
-          output += `Commands: ${content.commands.slice(0, 10).join(", ")}${content.commands.length > 10 ? ` (+${content.commands.length - 10} more)` : ""}\n`
-        }
-        if (content.skills.length) {
-          output += `Skills: ${content.skills.join(", ")}\n`
-        }
-        output += "\n"
-      }
-      
-      output += `\nRestart OpenCode to activate newly discovered content.`
-      return output
-    }
-  })
-  
-  dynamicTools.claude_search_commands = tool({
-    description: "Search for Claude marketplace commands by name or description",
-    args: {
-      query: tool.schema.string().describe("Search query")
-    },
-    async execute(args) {
-      const { commands } = await discoverMarketplaces(marketplacesRoot)
-      const query = args.query.toLowerCase()
-      const matches = []
-      
-      for (const [name, data] of commands) {
-        if (name.includes(query) || data.config.description.toLowerCase().includes(query)) {
-          matches.push({
-            name: data.basename,
-            marketplace: data.marketplace,
-            description: data.config.description.slice(0, 100),
-            tool: `claude_cmd_${name}`
-          })
-        }
-      }
-      
-      if (matches.length === 0) {
-        return `No commands found matching "${args.query}"`
-      }
-      
-      let output = `# Found ${matches.length} commands matching "${args.query}"\n\n`
-      for (const m of matches.slice(0, 20)) {
-        output += `- **${m.name}** (${m.marketplace})\n  ${m.description}\n  Tool: \`${m.tool}\`\n\n`
-      }
-      
-      if (matches.length > 20) {
-        output += `\n...and ${matches.length - 20} more`
-      }
-      
-      return output
-    }
-  })
-  
-  dynamicTools.claude_search_skills = tool({
-    description: "Search for Claude marketplace skills by name or description",
-    args: {
-      query: tool.schema.string().describe("Search query")
-    },
-    async execute(args) {
-      const { skills } = await discoverMarketplaces(marketplacesRoot)
-      const query = args.query.toLowerCase()
-      const matches = []
-      
-      for (const [name, data] of skills) {
-        if (name.includes(query) || data.config.description.toLowerCase().includes(query)) {
-          matches.push({
-            name: data.config.name,
-            marketplace: data.marketplace,
-            description: data.config.description.slice(0, 100),
-            tool: `claude_skill_${name}`
-          })
-        }
-      }
-      
-      if (matches.length === 0) {
-        return `No skills found matching "${args.query}"`
-      }
-      
-      let output = `# Found ${matches.length} skills matching "${args.query}"\n\n`
-      for (const m of matches) {
-        output += `- **${m.name}** (${m.marketplace})\n  ${m.description}\n  Tool: \`${m.tool}\`\n\n`
-      }
-      
-      return output
-    }
-  })
-  
-  // ========================================================================
-  // SIMPLE RUN COMMAND - Like "openskills read <name>"
-  // ========================================================================
-  
-  dynamicTools.claude_run = tool({
-    description: "Run a Claude marketplace command by name. Use this to execute commands like 'commit', 'review-pr', 'code-review', etc. If multiple commands match, shows options. Use interactive=true for commands that need user input (opens in tmux).",
-    args: {
-      command: tool.schema.string().describe("Command name to run (e.g., 'commit', 'code-review', 'feature-dev')"),
-      marketplace: tool.schema.string().optional().describe("Optional: specific marketplace (e.g., 'personal-dev-toolkit', 'claude-code-plugins')"),
-      arguments: tool.schema.string().optional().describe("Optional: arguments to pass to the command"),
-      interactive: tool.schema.boolean().optional().describe("Optional: run in interactive tmux session (default: false). Use for commands that need user input.")
-    },
-    async execute(args) {
-      const query = args.command.toLowerCase()
-      const mpFilter = args.marketplace?.toLowerCase()
-      
-      // Find matching commands
-      const matches = []
-      for (const [name, data] of commands) {
-        const nameMatch = data.basename.toLowerCase() === query || 
-                          data.basename.toLowerCase().includes(query) ||
-                          name.toLowerCase().includes(query)
-        const mpMatch = !mpFilter || data.marketplace.toLowerCase().includes(mpFilter)
-        
-        if (nameMatch && mpMatch) {
-          matches.push({ name, data })
-        }
-      }
-      
-      if (matches.length === 0) {
-        return `No command found matching "${args.command}"${mpFilter ? ` in ${args.marketplace}` : ''}.\n\nUse claude_search_commands to find available commands.`
-      }
-      
-      // If exact match, use it
-      const exactMatch = matches.find(m => m.data.basename.toLowerCase() === query)
-      const match = exactMatch || matches[0]
-      
-      let output = ""
-      if (matches.length > 1 && !exactMatch) {
-        output = `Multiple commands match "${args.command}":\n\n`
-        for (const m of matches.slice(0, 10)) {
-          output += `- **${m.data.basename}** (${m.data.marketplace})\n`
-        }
-        output += `\nUsing: **${match.data.basename}** from ${match.data.marketplace}\n`
-        output += `To use a different one, specify marketplace parameter.\n\n---\n\n`
-      }
-      
-      // If interactive mode, run via Claude CLI in tmux
-      if (args.interactive) {
-        const cmdArgs = args.arguments ? `"${match.data.basename}" ${args.arguments}` : `"${match.data.basename}"`
-        const result = runClaudeCLIInteractive(cmdArgs)
-        return output + result.output
-      }
-      
-      // Non-interactive: return template for LLM to execute
-      let template = match.data.config.template
-      if (args.arguments) {
-        template = template.replace(/\$ARGUMENTS/g, args.arguments)
-        const argParts = args.arguments.split(/\s+/)
-        argParts.forEach((arg, i) => {
-          template = template.replace(new RegExp(`\\$${i + 1}`, 'g'), arg)
-        })
-      }
-      
-      return output + `# Command: ${match.data.basename} (${match.data.marketplace})\n\n${template}`
-    }
-  })
-  
-  dynamicTools.claude_interactive = tool({
-    description: "Run any Claude CLI command interactively in a tmux session. Use this when you need the user to interact with Claude's prompts, select options, or provide input.",
-    args: {
-      command: tool.schema.string().describe("Full Claude CLI command (e.g., 'commit', 'review-pr', 'feature-dev --help')")
-    },
-    async execute(args) {
-      const result = runClaudeCLIInteractive(args.command)
-      return result.output
-    }
-  })
-  
-  dynamicTools.claude_list = tool({
-    description: "List all available Claude marketplace commands grouped by marketplace",
-    args: {
-      marketplace: tool.schema.string().optional().describe("Optional: filter by marketplace name")
-    },
-    async execute(args) {
-      const mpFilter = args.marketplace?.toLowerCase()
-      
-      // Group commands by marketplace
-      const byMarketplace = {}
-      for (const [name, data] of commands) {
-        if (mpFilter && !data.marketplace.toLowerCase().includes(mpFilter)) continue
-        if (!byMarketplace[data.marketplace]) {
-          byMarketplace[data.marketplace] = []
-        }
-        byMarketplace[data.marketplace].push(data.basename)
-      }
-      
-      let output = `# Claude Marketplace Commands\n\n`
-      output += `Total: ${commands.size} commands\n\n`
-      
-      for (const [mp, cmds] of Object.entries(byMarketplace)) {
-        output += `## ${mp} (${cmds.length})\n`
-        output += cmds.sort().map(c => `- ${c}`).join('\n')
-        output += '\n\n'
-      }
-      
-      output += `---\n\n**Usage:** \`claude_run\` with command name, e.g., \`claude_run("commit")\``
-      
-      return output
-    }
-  })
-  
-  // ========================================================================
-  // SKILL TOOLS (dynamically registered)
-  // Skills return their instructions for the LLM to follow
-  // ========================================================================
-  
-  if (REGISTER_INDIVIDUAL_TOOLS) {
-    for (const [toolName, skillData] of skills.entries()) {
-      const { config, marketplace } = skillData
-      const truncatedName = truncateToolName(toolName, 51)  // 64 - 13 ("claude_skill_")
-  
-      dynamicTools[`claude_skill_${truncatedName}`] = tool({
-        description: `[Skill: ${marketplace}] ${config.description}`,
+    tool: {
+      claude_plugin_browser: tool({
+        description: "Launch Claude's plugin marketplace browser. Opens the /plugin TUI where you can browse, search, and install plugins.",
         args: {},
         async execute() {
-          // Return the skill instructions for the LLM to process
-          return `# Skill: ${config.name}\n\n**Base directory:** ${config.baseDir}\n\n---\n\n${config.instructions}`
-        }
-      })
-    }
-    
-    // ========================================================================
-    // COMMAND TOOLS (dynamically registered)
-    // Commands return expanded templates for the LLM to execute
-    // ========================================================================
-    
-    for (const [cmdName, cmdData] of commands.entries()) {
-      const { config, marketplace, basename } = cmdData
-      const truncatedName = truncateToolName(cmdName, 53)  // 64 - 11 ("claude_cmd_")
-  
-      dynamicTools[`claude_cmd_${truncatedName}`] = tool({
-        description: `[Cmd: ${marketplace}] ${config.description}`,
-        args: {
-          arguments: tool.schema.string().optional().describe("Arguments to pass to the command")
-        },
-        async execute(args) {
-          let template = config.template
-          
-          // Replace $ARGUMENTS placeholder
-          if (args.arguments) {
-            template = template.replace(/\$ARGUMENTS/g, args.arguments)
-            
-            // Replace positional args ($1, $2, etc.)
-            const argParts = args.arguments.split(/\s+/)
-            argParts.forEach((arg, i) => {
-              template = template.replace(new RegExp(`\\$${i + 1}`, 'g'), arg)
-            })
+          if (!isTmuxInstalled()) {
+            return `**tmux required but not installed.**\n\nInstall: \`${getTmuxInstallInstructions()}\``
           }
           
-          // Return the expanded template for the LLM to execute
-          return `# Command: ${basename} (${marketplace})\n\n${template}`
+          const result = launchPluginBrowser()
+          
+          if (!result.success) {
+            return `Failed to launch: ${result.error}`
+          }
+          
+          return `# Claude Plugin Marketplace
+
+**Session:** \`${result.sessionName}\`
+
+## Attach now:
+\`\`\`bash
+tmux attach -t ${result.sessionName}
+\`\`\`
+
+**Controls:**
+- Arrow keys to navigate
+- Enter to select/install
+- \`q\` to exit
+- \`Ctrl+b d\` to detach without closing
+
+Installed plugins auto-load on OpenCode restart (via oh-my-opencode).`
+        }
+      }),
+
+      claude_sessions: tool({
+        description: "Manage Claude tmux sessions",
+        args: {
+          action: tool.schema.enum(["list", "kill", "kill-all"]).optional().describe("Action (default: list)"),
+          session: tool.schema.string().optional().describe("Session name for kill")
+        },
+        async execute(args) {
+          if (!isTmuxInstalled()) return "tmux not installed."
+          
+          const action = args.action || "list"
+          const sessions = listClaudeSessions()
+          
+          if (action === "list") {
+            if (sessions.length === 0) return "No active Claude sessions."
+            return `# Active Sessions\n\n${sessions.map(s => `- \`${s.split(':')[0]}\``).join('\n')}\n\n**Attach:** \`tmux attach -t <name>\``
+          }
+          
+          if (action === "kill") {
+            if (!args.session) return "Specify session name."
+            return killSession(args.session) ? `Killed: ${args.session}` : "Failed."
+          }
+          
+          if (action === "kill-all") {
+            if (sessions.length === 0) return "No sessions to kill."
+            let killed = 0
+            for (const s of sessions) { if (killSession(s.split(':')[0])) killed++ }
+            return `Killed ${killed}/${sessions.length} sessions.`
+          }
+          
+          return "Unknown action."
         }
       })
     }
-  }
-  
-  // Note: Config hook doesn't work reliably due to caching order in OpenCode.
-  // Commands are registered as tools instead, which works perfectly.
-  // Use claude_search_commands to find commands, then call claude_cmd_* tools.
-  
-  return {
-    tool: dynamicTools
   }
 }
