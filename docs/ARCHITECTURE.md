@@ -237,7 +237,7 @@ claude                              # Start Claude Code
 
 ### opencode-claude-marketplace-bridge (This Project)
 
-**Role:** Supplementary CLI wrappers (reduced scope)
+**Role:** Native OpenCode plugin marketplace UX with Claude-compatible state
 
 **When to Use:**
 - If you need to manage Claude plugins from within OpenCode conversation
@@ -245,18 +245,17 @@ claude                              # Start Claude Code
 - If you want to search/discover plugins without leaving OpenCode
 
 **Current Status:**
-Given oh-my-opencode's comprehensive Claude compatibility layer, this plugin's role is now supplementary rather than essential. Consider:
-
-1. **If using oh-my-opencode:** This plugin may be redundant for most use cases
-2. **If NOT using oh-my-opencode:** This plugin provides Claude CLI access
+This plugin now provides native discovery/inspection tools and verified bridge mutations that mirror Claude Code plugin lifecycle commands.
 
 **Tools Provided:**
 ```
-claude_marketplace_list             # List marketplaces
-claude_marketplace_add              # Add marketplace
-claude_plugin_install               # Install plugin
-claude_search_commands              # Search commands
-claude_search_skills                # Search skills
+plugin_search                        # Search all marketplace plugins
+plugin_info                          # Show detailed plugin metadata
+plugin_list                          # List installed plugins
+plugin_status                        # Show plugin system status
+plugin_install/uninstall             # Mutate plugin lifecycle via Claude CLI + verify
+plugin_enable/disable                # Toggle plugin state via Claude CLI + verify
+marketplace_list/add/update/remove   # Manage marketplaces via Claude CLI + verify
 ```
 
 ### agent-plugins (Simplified Role)
@@ -391,8 +390,8 @@ claude marketplace add <source>
 
 Or use this bridge plugin from within OpenCode:
 ```
-"Install the code-review plugin"
-→ Uses claude_plugin_install tool
+"Install code-review@claude-plugins-official"
+→ Uses plugin_install tool
 ```
 
 ---

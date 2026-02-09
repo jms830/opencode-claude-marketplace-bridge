@@ -1,7 +1,7 @@
 {
   "name": "opencode-claude-marketplace-bridge",
-  "version": "2.0.0",
-  "description": "Launch Claude's /plugin marketplace browser from OpenCode via tmux",
+  "version": "3.0.0",
+  "description": "Native plugin marketplace tools for OpenCode with Claude Code compatibility and verified CLI bridge operations",
   "main": "./index.js",
   "type": "module",
   "license": "MIT",
@@ -15,7 +15,8 @@
     "claude",
     "plugin",
     "marketplace",
-    "tmux"
+    "discovery",
+    "claude-code"
   ],
   "homepage": "https://github.com/jms830/opencode-claude-marketplace-bridge#readme",
   "bugs": {
@@ -23,6 +24,7 @@
   },
   "files": [
     "index.js",
+    "lib/",
     "README.md",
     "LICENSE"
   ],
