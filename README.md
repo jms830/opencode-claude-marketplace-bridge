@@ -18,12 +18,14 @@ OpenCode does not yet have Claude Code's native `/plugin` marketplace UX in core
 | `plugin_status` | Show plugin system health and marketplace coverage |
 | `plugin_install` | Install via Claude CLI + file-state verification |
 | `plugin_uninstall` | Uninstall via Claude CLI + file-state verification |
+| `plugin_update` | Update single plugin to latest + version/timestamp verification |
 | `plugin_enable` | Enable via Claude CLI + output verification |
 | `plugin_disable` | Disable via Claude CLI + output verification |
 | `marketplace_list` | List registered marketplaces |
 | `marketplace_add` | Add marketplace via Claude CLI + verification |
 | `marketplace_update` | Update marketplace(s) via Claude CLI + verification |
 | `marketplace_remove` | Remove marketplace via Claude CLI + verification |
+| `update_all` | Update all marketplaces + all plugins in one shot |
 
 ## Verification model
 
@@ -71,6 +73,8 @@ Use `/plugin` in OpenCode (if your command file routes to these tools), then:
 - discover: `plugin_search`
 - inspect: `plugin_info plugin="feature-dev@claude-plugins-official"`
 - install: `plugin_install plugin="feature-dev@claude-plugins-official"`
+- update one: `plugin_update plugin="feature-dev@claude-plugins-official"`
+- update everything: `update_all` (marketplaces + all plugins)
 - check status: `plugin_status`
 
 ## Development

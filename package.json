@@ -1,6 +1,6 @@
 {
   "name": "opencode-claude-marketplace-bridge",
-  "version": "3.0.0",
+  "version": "3.1.0",
   "description": "Native plugin marketplace tools for OpenCode with Claude Code compatibility and verified CLI bridge operations",
   "main": "./index.js",
   "type": "module",

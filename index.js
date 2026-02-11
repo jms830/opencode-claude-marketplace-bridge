@@ -20,12 +20,15 @@ function formatNumber(value) {
   return String(value)
 }
 
-function runClaude(args) {
-  const result = spawnSync("claude", args, {
+function runClaude(args, options = {}) {
+  const spawnOptions = {
     encoding: "utf-8",
-    timeout: 180_000,
+    timeout: options.timeout ?? 180_000,
     stdio: ["pipe", "pipe", "pipe"],
-  })
+  }
+  if (options.cwd) spawnOptions.cwd = options.cwd
+
+  const result = spawnSync("claude", args, spawnOptions)
 
   if (result.error) {
     return {
@@ -164,6 +167,7 @@ function outputSuggestsNoopUpdate(result) {
     text.includes("up to date") ||
     text.includes("already up-to-date") ||
     text.includes("already up to date") ||
+    text.includes("already at the latest") ||
     text.includes("no updates") ||
     text.includes("no change")
   )
@@ -578,6 +582,209 @@ const plugin_uninstall = tool({
   },
 })
 
+const plugin_update = tool({
+  description: "Update a single installed plugin to latest version via Claude CLI. Verifies version or lastUpdated change in installed_plugins.json.",
+  args: {
+    plugin: tool.schema.string().describe("Plugin identifier plugin@marketplace, or name if unique"),
+    marketplace: tool.schema.string().optional().describe("Marketplace for name-only plugin value"),
+    scope: tool.schema.enum(["user", "project", "local", "managed"]).optional().describe("Install scope override. Auto-detected from installed_plugins.json if omitted."),
+  },
+  async execute(args) {
+    if (!await isPluginSystemAvailable()) return "Plugin system not found."
+    if (!await isClaudeAvailable()) return "Claude CLI not available."
+
+    const resolved = await resolvePluginTarget(args.plugin, args.marketplace)
+    if (!resolved.ok) {
+      const extra = resolved.candidates?.length ? `\nCandidates:\n- ${resolved.candidates.join("\n- ")}` : ""
+      return `${resolved.reason}${extra}`
+    }
+
+    const pluginKey = resolved.target.key
+    const before = await getInstalledPlugins()
+    const beforeRows = before[pluginKey] ?? []
+
+    if (!beforeRows.length) {
+      return `Plugin \`${pluginKey}\` is not installed. Use \`plugin_install\` first.`
+    }
+
+    const firstRow = beforeRows[0]
+    const scope = args.scope ?? firstRow.scope ?? "user"
+    const projectPath = firstRow.projectPath ?? null
+    const beforeSummary = summarizePluginState(before, pluginKey)
+
+    const cliArgs = ["plugin", "update", pluginKey, "--scope", scope]
+    const cliOptions = {}
+    if (scope === "project" && projectPath) {
+      cliOptions.cwd = projectPath
+    }
+    const cliResult = runClaude(cliArgs, cliOptions)
+
+    const after = await getInstalledPlugins()
+    const afterRows = after[pluginKey] ?? []
+    const afterSummary = summarizePluginState(after, pluginKey)
+
+    const afterFirst = afterRows[0] ?? {}
+    const versionChanged = firstRow.version !== afterFirst.version
+    const updatedChanged = firstRow.lastUpdated !== afterFirst.lastUpdated
+    const outputNoop = outputSuggestsNoopUpdate(cliResult)
+    const verified = versionChanged || updatedChanged || outputNoop
+
+    const reason = versionChanged
+      ? `version changed: ${firstRow.version} -> ${afterFirst.version}`
+      : updatedChanged
+        ? `lastUpdated changed: ${firstRow.lastUpdated} -> ${afterFirst.lastUpdated}`
+        : outputNoop
+          ? "CLI output indicates already at latest version"
+          : "could not confirm update from state or CLI output"
+
+    const warning = cliResult.ok && !verified
+      ? "CLI reported success but no version/lastUpdated change detected and output didn't indicate no-op. Possible CLI/schema drift."
+      : null
+
+    return buildMutationReply(
+      `Update ${pluginKey}`,
+      cliResult,
+      { exitCode: cliResult.exitCode, verified, before: beforeSummary, after: afterSummary, reason, warning },
+    )
+  },
+})
+
+const update_all = tool({
+  description: "Update all marketplaces and all installed plugins to latest versions in one operation. Returns per-item results.",
+  args: {},
+  async execute() {
+    if (!await isPluginSystemAvailable()) return "Plugin system not found."
+    if (!await isClaudeAvailable()) return "Claude CLI not available."
+
+    const lines = []
+    lines.push("# Update All")
+    lines.push("")
+
+    // Phase 1: Update all marketplaces
+    lines.push("## Phase 1: Marketplace Catalogs")
+    lines.push("")
+
+    const marketplacesBefore = await getKnownMarketplaces()
+    const marketplaceCli = runClaude(["plugin", "marketplace", "update"])
+    const marketplacesAfter = await getKnownMarketplaces()
+
+    const mpTargets = Object.keys(marketplacesAfter)
+    let mpChanged = 0
+    for (const target of mpTargets) {
+      const bs = summarizeMarketplaceState(marketplacesBefore, target)
+      const as = summarizeMarketplaceState(marketplacesAfter, target)
+      if (bs !== as) mpChanged += 1
+    }
+
+    const mpNoop = outputSuggestsNoopUpdate(marketplaceCli)
+    const mpVerified = mpTargets.length > 0 && (mpChanged > 0 || mpNoop)
+
+    if (marketplaceCli.ok) {
+      lines.push(`✅ Marketplaces: ${mpChanged > 0 ? `${mpChanged} updated` : "all up to date"} (exit ${marketplaceCli.exitCode})`)
+    } else {
+      lines.push(`❌ Marketplaces: failed (exit ${marketplaceCli.exitCode})`)
+      if (marketplaceCli.stderr.trim()) {
+        lines.push(`   ${marketplaceCli.stderr.trim().split("\n")[0]}`)
+      }
+    }
+    lines.push("")
+
+    // Phase 2: Update all installed plugins
+    lines.push("## Phase 2: Installed Plugins")
+    lines.push("")
+
+    const installedBefore = await getInstalledPlugins()
+    const pluginKeys = Object.keys(installedBefore)
+
+    if (!pluginKeys.length) {
+      lines.push("No installed plugins to update.")
+      return lines.join("\n")
+    }
+
+    let updated = 0
+    let alreadyLatest = 0
+    let failed = 0
+    let unverified = 0
+    const pluginResults = []
+
+    for (const pluginKey of pluginKeys.sort()) {
+      const rows = installedBefore[pluginKey] ?? []
+      const firstRow = rows[0] ?? {}
+      const scope = firstRow.scope ?? "user"
+      const projectPath = firstRow.projectPath ?? null
+
+      const cliArgs = ["plugin", "update", pluginKey, "--scope", scope]
+      const cliOptions = { timeout: 120_000 }
+      if (scope === "project" && projectPath) {
+        cliOptions.cwd = projectPath
+      }
+
+      const result = runClaude(cliArgs, cliOptions)
+
+      const afterData = await getInstalledPlugins()
+      const afterRows = afterData[pluginKey] ?? []
+      const afterFirst = afterRows[0] ?? {}
+
+      const versionChanged = firstRow.version !== afterFirst.version
+      const updatedChanged = firstRow.lastUpdated !== afterFirst.lastUpdated
+      const noop = outputSuggestsNoopUpdate(result)
+      const verified = versionChanged || updatedChanged || noop
+
+      if (!result.ok) {
+        failed += 1
+        const errLine = result.stderr.trim().split("\n")[0] || "unknown error"
+        lines.push(`❌ ${pluginKey}: ${errLine}`)
+        pluginResults.push({ key: pluginKey, status: "failed", verified: false })
+      } else if (versionChanged) {
+        updated += 1
+        lines.push(`🔄 ${pluginKey}: ${firstRow.version} → ${afterFirst.version}`)
+        pluginResults.push({ key: pluginKey, status: "updated", verified: true })
+      } else if (noop) {
+        alreadyLatest += 1
+        lines.push(`✅ ${pluginKey}: latest (${firstRow.version})`)
+        pluginResults.push({ key: pluginKey, status: "latest", verified: true })
+      } else if (updatedChanged) {
+        updated += 1
+        lines.push(`🔄 ${pluginKey}: metadata updated (${firstRow.version})`)
+        pluginResults.push({ key: pluginKey, status: "updated", verified: true })
+      } else {
+        unverified += 1
+        lines.push(`⚠️ ${pluginKey}: exit 0 but could not verify (${firstRow.version})`)
+        pluginResults.push({ key: pluginKey, status: "unverified", verified: false })
+      }
+    }
+
+    const allPluginsVerified = failed === 0 && unverified === 0
+    const overallVerified = mpVerified && allPluginsVerified
+
+    lines.push("")
+    lines.push("## Verification")
+    lines.push(`- overall_verified: ${overallVerified}`)
+    lines.push(`- marketplaces_verified: ${mpVerified}`)
+    lines.push(`- plugins_verified: ${allPluginsVerified} (${pluginKeys.length - failed - unverified}/${pluginKeys.length})`)
+    lines.push("")
+    lines.push("## Summary")
+    lines.push(`- marketplaces: ${mpVerified ? "ok" : "unverified"} (${mpTargets.length} total, ${mpChanged} changed)`)
+    lines.push(`- plugins_updated: ${updated}`)
+    lines.push(`- plugins_already_latest: ${alreadyLatest}`)
+    lines.push(`- plugins_failed: ${failed}`)
+    lines.push(`- plugins_unverified: ${unverified}`)
+    lines.push(`- total_plugins: ${pluginKeys.length}`)
+
+    if (unverified > 0) {
+      lines.push("")
+      lines.push(`⚠️ ${unverified} plugin(s) could not be verified. CLI reported success but no version, lastUpdated, or output change detected. Possible CLI/schema drift.`)
+    }
+
+    if (updated > 0) {
+      lines.push("")
+      lines.push("Restart OpenCode to load updated plugin content.")
+    }
+
+    return lines.join("\n")
+  },
+})
+
 function verifyEnableDisableOutput(cliResult, keyword, pluginKey) {
   const combined = `${cliResult.stdout}\n${cliResult.stderr}`.toLowerCase()
   const keywordOk = combined.includes(keyword)
@@ -865,12 +1072,14 @@ export const ClaudeMarketplaceBridge = async () => {
       plugin_status,
       plugin_install,
       plugin_uninstall,
+      plugin_update,
       plugin_enable,
       plugin_disable,
       marketplace_list,
       marketplace_add,
       marketplace_update,
       marketplace_remove,
+      update_all,
     },
   }
 }
