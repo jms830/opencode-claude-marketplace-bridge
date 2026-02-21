@@ -1,4 +1,7 @@
-# Native Plugin Marketplace for OpenCode
+# opencode-claude-marketplace-bridge
+
+[![npm version](https://img.shields.io/npm/v/opencode-claude-marketplace-bridge.svg)](https://www.npmjs.com/package/opencode-claude-marketplace-bridge)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
 Browse, inspect, and manage Claude Code plugins from OpenCode without leaving the conversation.
 
@@ -8,7 +11,27 @@ This plugin reads the same data Claude Code uses under `~/.claude/plugins/` and 
 
 OpenCode does not yet have Claude Code's native `/plugin` marketplace UX in core. This bridge provides native discovery and management tools while staying fully compatible with Claude Code's plugin system.
 
-## What it provides
+## Installation
+
+Add to your `~/.config/opencode/opencode.json`:
+
+```json
+{
+  "$schema": "https://opencode.ai/config.json",
+  "plugin": [
+    "opencode-claude-marketplace-bridge@latest"
+  ]
+}
+```
+
+That's it — OpenCode will install the plugin automatically on next startup.
+
+### Requirements
+
+- [OpenCode](https://github.com/sst/opencode) with plugin support
+- [Claude Code CLI](https://claude.ai/code) (`claude` command in PATH) — required for install/uninstall/update operations
+
+## Tools Provided
 
 | Tool | Purpose |
 |------|---------|
@@ -27,7 +50,26 @@ OpenCode does not yet have Claude Code's native `/plugin` marketplace UX in core
 | `marketplace_remove` | Remove marketplace via Claude CLI + verification |
 | `update_all` | Update all marketplaces + all plugins in one shot |
 
-## Verification model
+## Usage Examples
+
+```text
+# Discover plugins
+> plugin_search query="code review"
+
+# Get details
+> plugin_info plugin="feature-dev@claude-plugins-official"
+
+# Install
+> plugin_install plugin="feature-dev@claude-plugins-official"
+
+# Update everything
+> update_all
+
+# Check system status
+> plugin_status
+```
+
+## Verification Model
 
 Mutating tools always execute in two phases:
 
@@ -36,52 +78,24 @@ Mutating tools always execute in two phases:
 
 If CLI success does not match on-disk state, tools return an explicit warning instead of silently claiming success.
 
-## Requirements
-
-- [oh-my-opencode](https://github.com/code-yeongyu/oh-my-opencode)
-- Claude Code CLI (`claude` command in PATH)
-- OpenCode with plugin support
-
-## Installation
-
-In `~/.config/opencode/opencode.json`:
-
-```json
-{
-  "plugin": [
-    "oh-my-opencode@latest",
-    "opencode-claude-marketplace-bridge"
-  ]
-}
-```
-
-For local development:
-
-```json
-{
-  "plugin": [
-    "oh-my-opencode@latest",
-    "/home/jordans/github/opencode-claude-marketplace-bridge"
-  ]
-}
-```
-
-## Command workflow
-
-Use `/plugin` in OpenCode (if your command file routes to these tools), then:
-
-- discover: `plugin_search`
-- inspect: `plugin_info plugin="feature-dev@claude-plugins-official"`
-- install: `plugin_install plugin="feature-dev@claude-plugins-official"`
-- update one: `plugin_update plugin="feature-dev@claude-plugins-official"`
-- update everything: `update_all` (marketplaces + all plugins)
-- check status: `plugin_status`
-
 ## Development
 
 ```bash
+# Install dependencies
 npm install
+
+# Smoke test
 node -e "import('./index.js').then(m => m.default({}).then(h => console.log(Object.keys(h.tool))))"
+```
+
+For local development, use a file:// path in your opencode.json:
+
+```json
+{
+  "plugin": [
+    "file:///path/to/opencode-claude-marketplace-bridge"
+  ]
+}
 ```
 
 ## License

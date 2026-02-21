@@ -908,7 +908,7 @@ The plugin can be referenced by local path during development:
 {
   "plugin": [
     "oh-my-opencode@latest",
-    "/home/jordans/github/opencode-claude-marketplace-bridge"
+    "/path/to/opencode-claude-marketplace-bridge"
   ]
 }
 ```
@@ -1024,7 +1024,7 @@ git commit -m "docs: update package metadata, README, and architecture for v3.0"
 **Step 1: Verify plugin loads in Node.js**
 
 ```bash
-cd /home/jordans/github/opencode-claude-marketplace-bridge
+cd /path/to/opencode-claude-marketplace-bridge
 node -e "
 import('./index.js').then(async (m) => {
   const hooks = await m.default({})

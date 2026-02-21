@@ -11,10 +11,17 @@ yarn-error.log*
 # Environment & secrets
 .env
 .env.*
+!.env.example
 *.pem
 *.key
 .secrets
 .credentials
+credentials*
+*.tfvars
+*.tfstate*
+
+# Session exports (AI agent sessions)
+*ses_*.md
 
 # OS files
 .DS_Store
